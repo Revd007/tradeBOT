@@ -1,0 +1,38 @@
+# Core Trading Dependencies
+MetaTrader5==5.0.45
+pandas==2.1.3
+numpy==1.24.3
+
+# Machine Learning
+scikit-learn==1.3.2
+joblib==1.3.2
+
+# LLM Integration (DeepSeek)
+llama-cpp-python==0.2.32
+
+# Data Processing
+beautifulsoup4==4.12.2
+requests==2.31.0
+lxml==4.9.3
+
+# Environment & Configuration
+python-dotenv==1.0.0
+pyyaml==6.0.1
+
+# Notifications
+python-telegram-bot==20.7
+
+# Firebase (Optional)
+firebase-admin==6.2.0
+
+# Utilities
+colorama==0.4.6
+tabulate==0.9.0
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+
+# Note: For llama-cpp-python with GPU support on Windows:
+# pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+

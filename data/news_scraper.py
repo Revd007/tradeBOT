@@ -1,4 +1,4 @@
-mport requests
+import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import logging
