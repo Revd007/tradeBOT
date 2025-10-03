@@ -166,7 +166,7 @@ class MT5Handler:
         Get historical candles
         
         Args:
-            symbol: Trading symbol (e.g., XAUUSD)
+            symbol: Trading symbol (e.g., XAUUSDm)
             timeframe: Timeframe (M5, M15, H1, H4, D1)
             count: Number of candles
             shift: Shift from current time
@@ -388,7 +388,7 @@ if __name__ == "__main__":
         print(f"Balance: ${account['balance']:.2f}")
         
         # Get candles
-        df = handler.get_candles("XAUUSD", "M5", count=100)
+        df = handler.get_candles("XAUUSDm", "M5", count=100)
         print(f"\nLatest candles:\n{df.tail()}")
         
         # Get positions

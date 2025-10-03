@@ -42,7 +42,7 @@ class CLSModelTrainer:
         
         Args:
             mt5_handler: MT5 connection
-            symbol: Trading symbol (e.g., XAUUSD)
+            symbol: Trading symbol (e.g., XAUUSDm)
             timeframe: Timeframe (M5, M15, H1, H4)
             candles: Number of candles to collect
         """
@@ -194,7 +194,7 @@ class CLSModelTrainer:
     def train_all_timeframes(
         self,
         mt5_handler,
-        symbol: str = 'XAUUSD',
+        symbol: str = 'XAUUSDm',
         model_type: str = 'random_forest'
     ):
         """
@@ -257,7 +257,7 @@ class CLSModelTrainer:
         self,
         mt5_handler,
         timeframe: str,
-        symbol: str = 'XAUUSD',
+        symbol: str = 'XAUUSDm',
         model_type: str = 'random_forest'
     ):
         """Retrain a single timeframe model"""
@@ -323,7 +323,7 @@ if __name__ == "__main__":
     
     trainer.train_all_timeframes(
         mt5_handler=mt5,
-        symbol='XAUUSD',
+        symbol='XAUUSDm',
         model_type='random_forest'  # or 'gradient_boosting'
     )
     

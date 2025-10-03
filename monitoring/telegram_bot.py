@@ -228,7 +228,7 @@ class TelegramNotifier:
         message = f"""
 🤖 <b>TRADING BOT STARTED</b>
 
-<b>Symbol:</b> {config.get('symbol', 'XAUUSD')}
+<b>Symbol:</b> {config.get('symbol', 'XAUUSDm')}
 <b>Timeframe:</b> {config.get('timeframe', 'M5')}
 <b>Account Type:</b> {config.get('account_type', 'DEMO')}
 
@@ -290,7 +290,7 @@ if __name__ == "__main__":
     # Test trade alert
     print("\n📤 Sending test trade alert...")
     trade_data = {
-        'symbol': 'XAUUSD',
+        'symbol': 'XAUUSDm',
         'type': 'BUY',
         'entry': 3850.50,
         'sl': 3840.00,

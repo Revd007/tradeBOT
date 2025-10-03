@@ -245,7 +245,7 @@ class EconomicCalendarScraper:
         Check if there are high-impact news events soon
         
         Args:
-            symbol: Trading symbol (e.g., XAUUSD, EURUSD)
+            symbol: Trading symbol (e.g., XAUUSDm, EURUSD)
             buffer_minutes: Minutes before/after event to avoid trading
         
         Returns:
@@ -391,11 +391,11 @@ if __name__ == "__main__":
         print(f"  Impact Score: {impact:.1f}/10")
         print()
     
-    # Check news conflict for XAUUSD
-    conflict = scraper.check_news_conflict('XAUUSD', buffer_minutes=30)
+    # Check news conflict for XAUUSDm
+    conflict = scraper.check_news_conflict('XAUUSDm', buffer_minutes=30)
     
     print(f"\n{'='*60}")
-    print(f"News Conflict Check for XAUUSD")
+    print(f"News Conflict Check for XAUUSDm")
     print(f"{'='*60}\n")
     print(f"Has Conflict: {conflict['has_conflict']}")
     print(f"Should Pause: {conflict['should_pause']}")

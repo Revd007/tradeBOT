@@ -359,7 +359,7 @@ if __name__ == "__main__":
         cls = CLSPredictor()
         
         # Single prediction
-        df = mt5.get_candles("XAUUSD", "M5", count=200)
+        df = mt5.get_candles("XAUUSDm", "M5", count=200)
         
         from strategies.base_strategy import BaseStrategy
         strat = BaseStrategy.__new__(BaseStrategy)
@@ -370,7 +370,7 @@ if __name__ == "__main__":
         print(f"Single prediction: {action} (confidence: {confidence:.2%})")
         
         # Multi-timeframe consensus
-        result = cls.multi_timeframe_consensus("XAUUSD", mt5)
+        result = cls.multi_timeframe_consensus("XAUUSDm", mt5)
         print(f"\nMTF Consensus: {result['consensus']} (confidence: {result['confidence']:.2%})")
         print(f"Votes: BUY={result['votes']['buy']}, SELL={result['votes']['sell']}, HOLD={result['votes']['hold']}")
         
@@ -379,9 +379,9 @@ if __name__ == "__main__":
         
         from strategies.strategy_manager import StrategyManager
         strategy_mgr = StrategyManager(mt5)
-        strategy_signals = strategy_mgr.analyze_all("XAUUSD")
+        strategy_signals = strategy_mgr.analyze_all("XAUUSDm")
         
-        fusion_result = fusion.analyze("XAUUSD", mt5, strategy_signals)
+        fusion_result = fusion.analyze("XAUUSDm", mt5, strategy_signals)
         
         print(f"\n--- TREND FUSION ---")
         print(f"Final Action: {fusion_result['final_action']}")

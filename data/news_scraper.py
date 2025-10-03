@@ -13,7 +13,7 @@ class NewsAPI:
         self.api_key = api_key
         self.base_url = "https://newsapi.org/v2"
         self.forex_keywords = [
-            'gold', 'xauusd', 'forex', 'fed', 'dollar', 'currency',
+            'gold', 'XAUUSDm', 'forex', 'fed', 'dollar', 'currency',
             'interest rate', 'inflation', 'central bank', 'trading'
         ]
     
@@ -32,7 +32,7 @@ class NewsAPI:
         try:
             # Map symbols to keywords
             keyword_map = {
-                'XAUUSD': 'gold OR "gold price"',
+                'XAUUSDm': 'gold OR "gold price"',
                 'EURUSD': 'euro OR "EUR/USD"',
                 'GBPUSD': 'pound OR "GBP/USD"',
                 'USDJPY': 'yen OR "USD/JPY"'
@@ -404,7 +404,7 @@ if __name__ == "__main__":
     news_api = NewsAPI("your_api_key_here")
     
     # Get latest news
-    news = news_api.get_latest_news("XAUUSD", hours_ago=12)
+    news = news_api.get_latest_news("XAUUSDm", hours_ago=12)
     print(f"Found {len(news)} news articles")
     
     for article in news[:3]:
@@ -412,7 +412,7 @@ if __name__ == "__main__":
         print(f"Sentiment: {article['sentiment']['label']} ({article['sentiment']['score']:.2f})")
     
     # Get market sentiment
-    sentiment = news_api.get_market_sentiment("XAUUSD")
+    sentiment = news_api.get_market_sentiment("XAUUSDm")
     print(f"\nOverall sentiment: {sentiment}")
     
     # Test calendar
@@ -425,7 +425,7 @@ if __name__ == "__main__":
     
     # Test news filter
     news_filter = NewsFilter("your_api_key", None)
-    can_trade, reason, info = news_filter.should_trade("XAUUSD")
+    can_trade, reason, info = news_filter.should_trade("XAUUSDm")
     
     print(f"\nCan trade: {can_trade}")
     print(f"Reason: {reason}")

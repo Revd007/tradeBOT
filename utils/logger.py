@@ -512,7 +512,7 @@ if __name__ == "__main__":
     
     # Log sample trade
     tracker.log_trade({
-        'symbol': 'XAUUSD',
+        'symbol': 'XAUUSDm',
         'type': 'BUY',
         'entry_price': 3850.00,
         'exit_price': 3865.00,

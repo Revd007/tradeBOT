@@ -392,7 +392,7 @@ if __name__ == "__main__":
     
     if mt5.initialize():
         # Get data
-        df = mt5.get_candles("XAUUSD", "M5", count=1000)
+        df = mt5.get_candles("XAUUSDm", "M5", count=1000)
         
         # Add indicators
         strategy = BaseStrategy.__new__(BaseStrategy)

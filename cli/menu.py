@@ -17,7 +17,7 @@ class CLIMenu:
     def __init__(self, bot_engine):
         self.bot = bot_engine
         self.running = True
-        self.current_symbol = "XAUUSD"
+        self.current_symbol = "XAUUSDm"
         self.current_timeframe = "M5"
         self.current_mode = "NORMAL"
     
@@ -53,7 +53,7 @@ class CLIMenu:
         """Print main menu"""
         menu_items = [
             ["1", "Analyze Now", f"Current: {self.current_symbol}"],
-            ["2", "Change SYMBOL", f"Available: EURUSD, GBPUSD, USDJPY, AUDUSD, XAUUSD, BTCUSD"],
+            ["2", "Change SYMBOL", f"Available: EURUSD, GBPUSD, USDJPY, AUDUSD, XAUUSDm, BTCUSD"],
             ["3", "Change TIMEFRAME", f"Current: {self.current_timeframe} | Options: M1, M5, M15, M30, H1, H4, D1"],
             ["4", "Change CANDLES", f"Current: 200 bars | e.g. 50 / 100 / 200 / 800"],
             ["5", "Switch ACCOUNT", f"Current: EXNESS | Options: DEMO / EXNESS"],
@@ -208,7 +208,7 @@ class CLIMenu:
         """Handle symbol change"""
         self.print_header()
         
-        available_symbols = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'XAUUSD', 'BTCUSD']
+        available_symbols = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'XAUUSDm', 'BTCUSD']
         
         print(Fore.YELLOW + "Available symbols:")
         for i, symbol in enumerate(available_symbols, 1):

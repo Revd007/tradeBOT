@@ -118,8 +118,8 @@ class ConfigLoader:
         """Get default configuration"""
         return {
             'trading': {
-                'default_symbol': 'XAUUSD',
-                'available_symbols': ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD'],
+                'default_symbol': 'XAUUSDm',
+                'available_symbols': ['XAUUSDm', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD'],
                 'timeframes': {
                     'fast': 'M5',
                     'medium': 'M15',
