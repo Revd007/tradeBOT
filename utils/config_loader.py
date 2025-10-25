@@ -133,8 +133,8 @@ class ConfigLoader:
                 'default_risk_percent': 1.0,
                 'max_risk_percent': 3.0,
                 'max_daily_loss': 100,
-                'max_trades_per_day': 10,
-                'max_open_positions': 3,
+                'max_trades_per_day': 1000,
+                'max_open_positions': 5,
                 'position_sizing': {
                     'min_lot': 0.01,
                     'max_lot': 1.0,

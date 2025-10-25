@@ -18,8 +18,22 @@ def setup_logging(log_dir: str = "./logs", level: str = "INFO"):
     logger = logging.getLogger()
     logger.setLevel(getattr(logging, level.upper()))
     
-    # Console handler
-    console_handler = logging.StreamHandler()
+    # 🔥 CRITICAL FIX: Clear existing handlers to avoid duplication
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    
+    # Console handler with UTF-8 encoding
+    # 🔥 FIX: Use utf-8 encoding for Windows emoji support
+    import sys
+    
+    # Fix stdout encoding for Windows
+    if hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except Exception:
+            pass  # Ignore if reconfigure fails
+    
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_format = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -27,11 +41,12 @@ def setup_logging(log_dir: str = "./logs", level: str = "INFO"):
     )
     console_handler.setFormatter(console_format)
     
-    # File handler with rotation
+    # File handler with rotation and UTF-8 encoding
     file_handler = RotatingFileHandler(
         log_file,
         maxBytes=10*1024*1024,  # 10MB
-        backupCount=5
+        backupCount=5,
+        encoding='utf-8'  # 🔥 FIX: Explicit UTF-8 encoding for file
     )
     file_handler.setLevel(logging.DEBUG)
     file_format = logging.Formatter(

@@ -24,6 +24,10 @@ class EconomicCalendarScraper:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
+        
+        # 🔥 NEW: Cache to avoid repeated API calls during training
+        self._calendar_cache = {}  # {date_key: events}
+        self._cache_duration = 3600  # 1 hour cache
     
     def get_calendar_events(
         self, 
@@ -47,19 +51,31 @@ class EconomicCalendarScraper:
         if not end_date:
             end_date = start_date + timedelta(days=7)
         
+        # 🔥 NEW: Check cache first to avoid repeated API calls
+        cache_key = f"{start_date.date()}_{end_date.date()}_{importance}"
+        if cache_key in self._calendar_cache:
+            cached_time, cached_events = self._calendar_cache[cache_key]
+            if (datetime.now() - cached_time).total_seconds() < self._cache_duration:
+                return cached_events  # Return cached result
+        
         events = []
         
-        # Try Trading Economics API first
+        # 🔥 ONLY use Trading Economics API (disable Forex Factory)
         if self.api_key:
             events = self._get_from_trading_economics(start_date, end_date)
+        else:
+            logger.warning("⚠️  No TradingEconomics API key provided, returning empty calendar")
         
-        # Fallback to free sources
-        if not events:
-            events = self._get_from_forex_factory(start_date, end_date)
+        # 🔥 DISABLED: Forex Factory scraping (too slow + SSL errors)
+        # if not events:
+        #     events = self._get_from_forex_factory(start_date, end_date)
         
         # Filter by importance
         if importance:
             events = [e for e in events if e['importance'].lower() == importance.lower()]
+        
+        # 🔥 NEW: Store in cache
+        self._calendar_cache[cache_key] = (datetime.now(), events)
         
         return events
     
@@ -70,36 +86,109 @@ class EconomicCalendarScraper:
     ) -> List[Dict]:
         """Fetch from TradingEconomics API"""
         try:
-            url = f"{self.base_url}/calendar"
+            # 🔥 FIXED API FORMAT: Use correct TradingEconomics endpoint
+            start_str = start_date.strftime('%Y-%m-%d')
+            end_str = end_date.strftime('%Y-%m-%d')
+            
+            # According to docs: https://docs.tradingeconomics.com/economic_calendar/snapshot/
+            # Format: /calendar?c={api_key}&d1={start}&d2={end}
+            endpoint = f"{self.base_url}/calendar"
+            
             params = {
-                'c': self.api_key,
-                'd1': start_date.strftime('%Y-%m-%d'),
-                'd2': end_date.strftime('%Y-%m-%d')
+                'c': self.api_key,  # 🔥 FIX: Use 'c' parameter for API key
+                'd1': start_str,
+                'd2': end_str
             }
             
-            response = self.session.get(url, params=params, timeout=10)
+            # 🔥 DEBUG: Log the actual URL being called (once)
+            if not hasattr(self, '_url_logged'):
+                logger.info(f"   📡 TradingEconomics API URL: {endpoint}?c={self.api_key[:10]}...&d1={start_str}&d2={end_str}")
+                self._url_logged = True
+            
+            # Make request
+            response = self.session.get(endpoint, params=params, timeout=10)
+            
             response.raise_for_status()
             
             data = response.json()
             
+            # 🔥 DEBUG: Log response structure
+            logger.info(f"   📊 TradingEconomics response type: {type(data)}")
+            if isinstance(data, dict):
+                logger.info(f"   📊 Response keys: {list(data.keys())}")
+                if 'message' in data:
+                    logger.warning(f"   📊 API message: {data['message']}")
+            elif isinstance(data, list):
+                logger.info(f"   📊 Response length: {len(data)}")
+                if len(data) > 0:
+                    logger.info(f"   📊 Sample item keys: {list(data[0].keys()) if isinstance(data[0], dict) else 'Not a dict'}")
+            
+            # Check if response is valid
+            if not isinstance(data, list):
+                logger.warning(f"⚠️  Unexpected API response format: {type(data)}")
+                return []
+            
             events = []
             for item in data:
-                events.append({
-                    'datetime': datetime.fromisoformat(item.get('Date', '').replace('Z', '+00:00')),
-                    'currency': item.get('Country', 'USD'),
-                    'event': item.get('Event', ''),
-                    'importance': self._map_importance(item.get('Importance', 1)),
-                    'actual': item.get('Actual'),
-                    'forecast': item.get('Forecast'),
-                    'previous': item.get('Previous'),
-                    'source': 'TradingEconomics'
-                })
+                try:
+                    # 🔥 FIX: Handle different date formats from TradingEconomics
+                    date_str = item.get('Date', '')
+                    if not date_str:
+                        continue
+                    
+                    # Try different date parsing methods
+                    try:
+                        # Format: "2024-10-13T14:30:00Z" or "2024-10-13T14:30:00"
+                        if 'T' in date_str:
+                            if date_str.endswith('Z'):
+                                event_datetime = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                            else:
+                                event_datetime = datetime.fromisoformat(date_str)
+                        else:
+                            # Format: "2024-10-13"
+                            event_datetime = datetime.strptime(date_str, '%Y-%m-%d')
+                    except ValueError:
+                        # Skip if date parsing fails
+                        continue
+                    
+                    events.append({
+                        'datetime': event_datetime,
+                        'currency': item.get('Country', 'USD'),
+                        'event': item.get('Event', ''),
+                        'importance': self._map_importance(item.get('Importance', 1)),
+                        'actual': item.get('Actual'),
+                        'forecast': item.get('Forecast'),
+                        'previous': item.get('Previous'),
+                        'source': 'TradingEconomics'
+                    })
+                except Exception as parse_err:
+                    # Skip malformed events
+                    continue
             
-            logger.info(f"✅ Fetched {len(events)} events from TradingEconomics")
+            if events:
+                logger.info(f"✅ Fetched {len(events)} events from TradingEconomics")
+            else:
+                logger.warning(f"⚠️  No events parsed from API response")
+            
             return events
         
+        except requests.exceptions.HTTPError as e:
+            # 🔥 IMPROVED: Log detailed error info
+            logger.warning(f"⚠️  TradingEconomics API HTTP {e.response.status_code}")
+            try:
+                error_msg = e.response.json().get('message', e.response.text[:200])
+                logger.warning(f"   Error: {error_msg}")
+            except:
+                logger.warning(f"   Response: {e.response.text[:200]}")
+            
+            logger.warning(f"   💡 API key: {self.api_key[:10]}... (first 10 chars)")
+            return []
+        
         except Exception as e:
-            logger.error(f"Error fetching from TradingEconomics: {str(e)}")
+            # 🔥 IMPROVED: Silent failure for training (don't spam console)
+            if not hasattr(self, '_generic_error_logged'):
+                logger.warning(f"⚠️  Calendar fetch failed: {type(e).__name__}. Continuing without calendar data.")
+                self._generic_error_logged = True
             return []
     
     def _get_from_forex_factory(

@@ -16,7 +16,7 @@ class BreakoutStrategy(BaseStrategy):
     
     def __init__(self):
         super().__init__("Breakout", "HIGH")
-        self.min_confidence = 0.65
+        self.min_confidence = 0.50  # 🔥 LOWER (was 0.65) → more signals!
     
     def analyze(self, df: pd.DataFrame, symbol_info: Dict) -> Optional[Dict]:
         """

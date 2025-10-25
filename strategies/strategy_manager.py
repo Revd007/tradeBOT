@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from strategies.counter_trend import CounterTrendStrategy
 from strategies.breakout import BreakoutStrategy
 from strategies.fibonacci_atr import FibonacciATRStrategy
+from strategies.mean_reversion import MeanReversionStrategy  # 🔥 NEW: Mean reversion strategy
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,8 @@ class StrategyManager:
         self.strategies = {
             'counter_trend': CounterTrendStrategy(),
             'breakout': BreakoutStrategy(),
-            'fibonacci_atr': FibonacciATRStrategy()
+            'fibonacci_atr': FibonacciATRStrategy(),
+            'mean_reversion': MeanReversionStrategy()  # 🔥 NEW: Mean reversion strategy
         }
         
         # Filter enabled strategies
@@ -165,6 +167,8 @@ class StrategyManager:
             self.strategies[strategy_name] = BreakoutStrategy()
         elif strategy_name == 'fibonacci_atr':
             self.strategies[strategy_name] = FibonacciATRStrategy()
+        elif strategy_name == 'mean_reversion':
+            self.strategies[strategy_name] = MeanReversionStrategy()
         else:
             logger.warning(f"Unknown strategy: {strategy_name}")
             return

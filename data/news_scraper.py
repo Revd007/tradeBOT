@@ -2,53 +2,81 @@ import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
 class NewsAPI:
-    """News API client for forex-related news"""
+    """News API client for forex-related news with enhanced sentiment analysis"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key
         self.base_url = "https://newsapi.org/v2"
         self.forex_keywords = [
             'gold', 'XAUUSDm', 'forex', 'fed', 'dollar', 'currency',
             'interest rate', 'inflation', 'central bank', 'trading'
         ]
+        
+        # 🔥 ENHANCED: Gold-specific keywords for better relevance
+        self.gold_keywords = [
+            'gold', 'precious metals', 'XAU', 'safe haven', 
+            'gold price', 'gold trading', 'bullion'
+        ]
     
-    def get_latest_news(
+    def get_historical_news(
         self,
-        symbol: str = 'gold',
-        hours_ago: int = 24,
+        symbol: str = 'XAUUSDm',
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
         language: str = 'en'
     ) -> List[Dict]:
         """
-        Get latest news for a symbol
+        🔥 NEW: Get historical news for training data date range
+        
+        Args:
+            symbol: Trading symbol
+            start_date: Start date for news
+            end_date: End date for news
+            language: Language code
         
         Returns:
             List of news articles with sentiment
         """
+        if not self.api_key or self.api_key in ['free_key_or_mock', 'your_api_key_here']:
+            logger.warning("⚠️  NewsAPI key not configured, using synthetic data")
+            return []
+        
         try:
             # Map symbols to keywords
             keyword_map = {
-                'XAUUSDm': 'gold OR "gold price"',
-                'EURUSD': 'euro OR "EUR/USD"',
-                'GBPUSD': 'pound OR "GBP/USD"',
-                'USDJPY': 'yen OR "USD/JPY"'
+                'XAUUSDm': 'gold OR "gold price" OR "precious metals"',
+                'EURUSD': 'euro OR "EUR/USD" OR "european central bank"',
+                'GBPUSD': 'pound OR "GBP/USD" OR "bank of england"',
+                'USDJPY': 'yen OR "USD/JPY" OR "bank of japan"'
             }
             
-            query = keyword_map.get(symbol, 'forex')
+            query = keyword_map.get(symbol, 'gold')
             
-            # Calculate time range
-            from_time = datetime.now() - timedelta(hours=hours_ago)
+            # NewsAPI free tier only allows 1 month back
+            if not start_date:
+                start_date = datetime.now() - timedelta(days=30)
+            if not end_date:
+                end_date = datetime.now()
+            
+            # Limit to 1 month for free tier
+            if (end_date - start_date).days > 30:
+                start_date = end_date - timedelta(days=30)
+                logger.warning(f"⚠️  NewsAPI free tier limited to 30 days, using {start_date.date()} to {end_date.date()}")
             
             params = {
                 'q': query,
-                'from': from_time.isoformat(),
+                'from': start_date.strftime('%Y-%m-%d'),
+                'to': end_date.strftime('%Y-%m-%d'),
                 'sortBy': 'publishedAt',
                 'language': language,
-                'apiKey': self.api_key
+                'apiKey': self.api_key,
+                'pageSize': 100  # Max results
             }
             
             response = requests.get(
@@ -58,48 +86,65 @@ class NewsAPI:
             )
             
             if response.status_code != 200:
-                logger.error(f"News API error: {response.status_code}")
+                logger.error(f"NewsAPI HTTP {response.status_code}: {response.text[:200]}")
                 return []
             
             data = response.json()
+            
+            if data.get('status') != 'ok':
+                logger.error(f"NewsAPI error: {data.get('message', 'Unknown error')}")
+                return []
+            
             articles = data.get('articles', [])
             
-            # Process articles
+            # Process articles with enhanced sentiment
             processed = []
-            for article in articles[:10]:  # Limit to 10 most recent
-                processed.append({
-                    'title': article.get('title', ''),
-                    'description': article.get('description', ''),
-                    'source': article.get('source', {}).get('name', ''),
-                    'published_at': article.get('publishedAt', ''),
-                    'url': article.get('url', ''),
-                    'sentiment': self._analyze_sentiment(
-                        article.get('title', '') + ' ' + article.get('description', '')
-                    )
-                })
+            for article in articles:
+                try:
+                    published_at = datetime.fromisoformat(article.get('publishedAt', '').replace('Z', '+00:00'))
+                    text = f"{article.get('title', '')} {article.get('description', '')}"
+                    sentiment = self._analyze_sentiment(text)
+                    
+                    processed.append({
+                        'datetime': published_at,
+                        'title': article.get('title', ''),
+                        'description': article.get('description', ''),
+                        'source': article.get('source', {}).get('name', ''),
+                        'url': article.get('url', ''),
+                        'sentiment': sentiment
+                    })
+                except Exception as e:
+                    continue
             
-            logger.info(f"Retrieved {len(processed)} news articles for {symbol}")
+            logger.info(f"✅ Fetched {len(processed)} news articles from NewsAPI ({start_date.date()} to {end_date.date()})")
             return processed
         
         except Exception as e:
-            logger.error(f"Error fetching news: {str(e)}")
+            logger.error(f"Error fetching historical news: {str(e)}")
             return []
     
     def _analyze_sentiment(self, text: str) -> Dict:
         """
-        Simple sentiment analysis (keyword-based)
-        In production, use NLP library like TextBlob or transformers
+        🔥 ENHANCED: Sentiment analysis with gold-specific keywords
         """
         text_lower = text.lower()
         
+        # 🔥 BULLISH KEYWORDS (expanded for gold)
         positive_words = [
             'gain', 'rise', 'surge', 'rally', 'boost', 'strong',
-            'bullish', 'recovery', 'growth', 'advance', 'positive'
+            'bullish', 'recovery', 'growth', 'advance', 'positive',
+            'soar', 'climb', 'jump', 'outperform', 'breakout',
+            'support', 'haven', 'demand', 'buying', 'uptrend',
+            'inflation hedge', 'safe haven', 'record high'
         ]
         
+        # 🔥 BEARISH KEYWORDS (expanded for gold)
         negative_words = [
             'fall', 'drop', 'decline', 'plunge', 'weak', 'bearish',
-            'crisis', 'concern', 'fear', 'slump', 'negative', 'risk'
+            'crisis', 'concern', 'fear', 'slump', 'negative', 'risk',
+            'tumble', 'crash', 'slide', 'pressure', 'sell-off',
+            'resistance', 'overbought', 'downtrend', 'correction',
+            'dollar strength', 'rate hike'
         ]
         
         positive_count = sum(1 for word in positive_words if word in text_lower)
@@ -108,14 +153,15 @@ class NewsAPI:
         total = positive_count + negative_count
         
         if total == 0:
-            return {'label': 'NEUTRAL', 'score': 0.0}
+            return {'label': 'NEUTRAL', 'score': 0.0, 'positive_count': 0, 'negative_count': 0}
         
+        # Normalized score [-1.0, 1.0]
         score = (positive_count - negative_count) / total
         
         if score > 0.2:
-            label = 'POSITIVE'
+            label = 'BULLISH'
         elif score < -0.2:
-            label = 'NEGATIVE'
+            label = 'BEARISH'
         else:
             label = 'NEUTRAL'
         
@@ -124,6 +170,83 @@ class NewsAPI:
             'score': score,
             'positive_count': positive_count,
             'negative_count': negative_count
+        }
+    
+    def calculate_aggregated_sentiment(
+        self,
+        articles: List[Dict],
+        time_window_hours: int = 24
+    ) -> Dict:
+        """
+        🔥 NEW: Calculate aggregated market sentiment from multiple articles
+        
+        Args:
+            articles: List of news articles with sentiment
+            time_window_hours: Consider articles within this time window
+        
+        Returns:
+            Aggregated sentiment metrics
+        """
+        if not articles:
+            return {
+                'overall_label': 'NEUTRAL',
+                'sentiment_score': 0.0,
+                'confidence': 0.0,
+                'article_count': 0,
+                'bullish_ratio': 0.0,
+                'bearish_ratio': 0.0
+            }
+        
+        # Filter by time window
+        cutoff_time = datetime.now() - timedelta(hours=time_window_hours)
+        recent_articles = []
+        for a in articles:
+            article_time = a.get('datetime', cutoff_time)
+            # 🔥 FIX: Handle timezone-aware vs naive datetime comparison
+            if hasattr(article_time, 'tzinfo') and article_time.tzinfo is not None:
+                article_time = article_time.replace(tzinfo=None)  # Convert to naive
+            if article_time >= cutoff_time:
+                recent_articles.append(a)
+        
+        if not recent_articles:
+            recent_articles = articles[:10]  # Use 10 most recent if none in window
+        
+        sentiments = [a['sentiment'] for a in recent_articles]
+        
+        bullish_count = sum(1 for s in sentiments if s['label'] == 'BULLISH')
+        bearish_count = sum(1 for s in sentiments if s['label'] == 'BEARISH')
+        neutral_count = sum(1 for s in sentiments if s['label'] == 'NEUTRAL')
+        
+        total = len(sentiments)
+        
+        # Calculate ratios
+        bullish_ratio = bullish_count / total
+        bearish_ratio = bearish_count / total
+        neutral_ratio = neutral_count / total
+        
+        # Aggregate sentiment score (weighted average)
+        sentiment_scores = [s['score'] for s in sentiments]
+        avg_sentiment_score = np.mean(sentiment_scores)
+        
+        # Determine overall label
+        if bullish_ratio > bearish_ratio * 1.5:
+            overall_label = 'BULLISH'
+            confidence = bullish_ratio
+        elif bearish_ratio > bullish_ratio * 1.5:
+            overall_label = 'BEARISH'
+            confidence = bearish_ratio
+        else:
+            overall_label = 'NEUTRAL'
+            confidence = neutral_ratio
+        
+        return {
+            'overall_label': overall_label,
+            'sentiment_score': float(avg_sentiment_score),
+            'confidence': float(confidence),
+            'article_count': total,
+            'bullish_ratio': float(bullish_ratio),
+            'bearish_ratio': float(bearish_ratio),
+            'neutral_ratio': float(neutral_ratio)
         }
     
     def get_market_sentiment(self, symbol: str, hours_ago: int = 6) -> Dict:
@@ -267,7 +390,7 @@ class EconomicCalendar:
         symbol: str,
         minutes_before: int = 30,
         minutes_after: int = 15
-    ) -> Tuple[bool, Optional[Dict]]:
+    ) -> tuple[bool, Optional[dict]]:
         """
         Check if trading should be paused due to upcoming news
         
@@ -346,7 +469,7 @@ class NewsFilter:
         self.news_api = NewsAPI(news_api_key) if news_api_key else None
         self.calendar = EconomicCalendar(calendar_api_key)
     
-    def should_trade(self, symbol: str) -> Tuple[bool, str, Dict]:
+    def should_trade(self, symbol: str) -> tuple[bool, str, dict]:
         """
         Determine if it's safe to trade based on news
         

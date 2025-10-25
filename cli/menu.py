@@ -19,7 +19,8 @@ class CLIMenu:
         self.running = True
         self.current_symbol = "XAUUSDm"
         self.current_timeframe = "M5"
-        self.current_mode = "NORMAL"
+        # 🔥 FIX: Sync with bot config
+        self.current_mode = self.bot.config.get('trade_mode', 'NORMAL')
     
     def clear_screen(self):
         """Clear terminal screen"""
@@ -244,21 +245,127 @@ class CLIMenu:
         print(Fore.GREEN + f"✅ Timeframe changed to: {self.current_timeframe}")
         input("\nPress ENTER to continue...")
     
-    def handle_toggle_auto_trade(self):
-        """Toggle auto-trading"""
-        self.bot.auto_trade_enabled = not self.bot.auto_trade_enabled
+    def handle_train_models(self):
+        """Handle CLS model training"""
+        self.print_header()
         
-        status = Fore.GREEN + "ENABLED" if self.bot.auto_trade_enabled else Fore.RED + "DISABLED"
-        print(f"\n🤖 Auto-trading {status}")
+        print(Fore.YELLOW + Style.BRIGHT + "🎓 CLS MODEL TRAINER\n")
+        print(Fore.WHITE + "=" * 80)
+        print("\nOptions:")
+        print("  1. Train ALL timeframes (M5, M15, H1, H4) - Takes 10-30 minutes")
+        print("  2. Retrain SINGLE timeframe")
+        print("  0. Cancel")
         
-        if self.bot.auto_trade_enabled:
-            print(Fore.YELLOW + "\n⚠️  WARNING: Bot will automatically execute trades!")
-            confirm = input("Type 'YES' to confirm: ")
-            if confirm.upper() != 'YES':
-                self.bot.auto_trade_enabled = False
-                print(Fore.RED + "Auto-trading cancelled")
+        choice = input(Fore.WHITE + "\nSelect option: ").strip()
+        
+        if choice == '1':
+            # Train all timeframes
+            print(Fore.YELLOW + "\n⚠️  WARNING: This will take 10-30 minutes!")
+            print(Fore.YELLOW + "The bot will collect 5000+ candles per timeframe and train models.")
+            
+            confirm = input(Fore.WHITE + "\nProceed? (yes/no): ").strip().lower()
+            
+            if confirm == 'yes':
+                print(Fore.CYAN + "\n🚀 Starting training process...")
+                print(Fore.WHITE + "Symbol: XAUUSDm")
+                print(Fore.WHITE + "Model Type: Random Forest")
+                print(Fore.WHITE + "Timeframes: M5, M15, H1, H4\n")
+                
+                success = self.bot.train_cls_models(
+                    symbol='XAUUSDm',
+                    model_type='random_forest'
+                )
+                
+                if success:
+                    print(Fore.GREEN + "\n✅ Training completed successfully!")
+                    print(Fore.WHITE + "Models saved to: ./models/saved_models/")
+                    print(Fore.WHITE + "Models have been reloaded into the bot engine.")
+                else:
+                    print(Fore.RED + "\n❌ Training failed! Check logs for details.")
+            else:
+                print(Fore.RED + "Training cancelled")
+        
+        elif choice == '2':
+            # Retrain single timeframe
+            print(Fore.YELLOW + "\nAvailable timeframes:")
+            timeframes = ['M5', 'M15', 'H1', 'H4']
+            for i, tf in enumerate(timeframes, 1):
+                print(f"  {i}. {tf}")
+            
+            tf_choice = input(Fore.WHITE + "\nSelect timeframe: ").strip()
+            
+            if tf_choice.isdigit() and 1 <= int(tf_choice) <= len(timeframes):
+                selected_tf = timeframes[int(tf_choice) - 1]
+            elif tf_choice.upper() in timeframes:
+                selected_tf = tf_choice.upper()
+            else:
+                print(Fore.RED + "Invalid timeframe")
+                input("\nPress ENTER to continue...")
+                return
+            
+            print(Fore.CYAN + f"\n🚀 Retraining {selected_tf} model...")
+            print(Fore.WHITE + f"Symbol: XAUUSDm")
+            print(Fore.WHITE + f"Model Type: Random Forest\n")
+            
+            success = self.bot.retrain_single_timeframe(
+                timeframe=selected_tf,
+                symbol='XAUUSDm',
+                model_type='random_forest'
+            )
+            
+            if success:
+                print(Fore.GREEN + f"\n✅ {selected_tf} model retrained successfully!")
+                print(Fore.WHITE + f"Model saved to: ./models/saved_models/cls_{selected_tf.lower()}.pkl")
+                print(Fore.WHITE + "Models have been reloaded into the bot engine.")
+            else:
+                print(Fore.RED + f"\n❌ {selected_tf} model retraining failed! Check logs for details.")
+        
+        else:
+            print(Fore.YELLOW + "Training cancelled")
         
         input("\nPress ENTER to continue...")
+    
+    def handle_toggle_auto_trade(self):
+        """🔥 FIXED: Toggle auto-trading and actually START the loop!"""
+        if not self.bot.auto_trade_enabled:
+            # Turning ON
+            print(Fore.YELLOW + "\n⚠️  WARNING: Bot will automatically execute trades!")
+            print(Fore.WHITE + f"Symbol: {self.current_symbol}")
+            print(Fore.WHITE + f"Timeframe: {self.current_timeframe}")
+            print(Fore.WHITE + f"Trade Mode: {self.current_mode}")
+            print(Fore.WHITE + f"Lot Size: {self.bot.default_lot_size}")
+            print()
+            confirm = input("Type 'YES' to start AUTO-TRADING: ")
+            
+            if confirm.upper() == 'YES':
+                self.bot.auto_trade_enabled = True
+                print(Fore.GREEN + "\n✅ Auto-trading ENABLED")
+                print(Fore.YELLOW + "🤖 Starting auto-trade loop...")
+                print(Fore.YELLOW + "Press Ctrl+C to stop\n")
+                
+                # 🔥 CRITICAL FIX: Actually START the loop!
+                try:
+                    self.bot.auto_trade_loop(
+                        symbol=self.current_symbol,
+                        timeframe=self.current_timeframe,
+                        interval=300  # 5 minutes
+                    )
+                except KeyboardInterrupt:
+                    print(Fore.YELLOW + "\n\n⚠️  Auto-trade stopped by user")
+                    self.bot.auto_trade_enabled = False
+                except Exception as e:
+                    print(Fore.RED + f"\n\n❌ Error in auto-trade: {str(e)}")
+                    self.bot.auto_trade_enabled = False
+                
+                input("\nPress ENTER to return to menu...")
+            else:
+                print(Fore.RED + "Auto-trading cancelled")
+                input("\nPress ENTER to continue...")
+        else:
+            # Turning OFF
+            self.bot.auto_trade_enabled = False
+            print(Fore.RED + "\n❌ Auto-trading DISABLED")
+            input("\nPress ENTER to continue...")
     
     def run(self):
         """Main menu loop"""
@@ -276,14 +383,26 @@ class CLIMenu:
                 elif choice == '3':
                     self.handle_change_timeframe()
                 elif choice == '6':
-                    # Change mode
+                    # 🔥 PERBAIKAN: Hanya mengubah satu nilai config
                     modes = ['NORMAL', 'AGGRESSIVE', 'SCALPING', 'LONG_HOLD']
-                    print("\nModes:", ", ".join(modes))
+                    print("\n📊 Available Modes:")
+                    print("   SCALPING: Tight SL/TP, high frequency")
+                    print("   NORMAL: Balanced approach ✅ Recommended")
+                    print("   AGGRESSIVE: Wider stops, higher risk/reward")
+                    print("   LONG_HOLD: Very wide stops, patient trades\n")
+                    
                     mode = input("Select mode: ").upper()
                     if mode in modes:
                         self.current_mode = mode
-                        print(Fore.GREEN + f"✅ Mode: {mode}")
+                        # Cukup ubah satu konfigurasi ini. Bot engine akan menangani sisanya.
+                        self.bot.config['trade_mode'] = mode
+                        print(Fore.GREEN + f"✅ Trade mode changed to: {mode}")
+                    else:
+                        print(Fore.RED + "❌ Invalid mode")
                     input("\nPress ENTER to continue...")
+                
+                elif choice == '7':
+                    self.handle_train_models()
                 
                 elif choice == '8':
                     self.handle_toggle_auto_trade()

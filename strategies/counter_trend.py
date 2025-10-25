@@ -11,7 +11,7 @@ class CounterTrendStrategy(BaseStrategy):
     
     def __init__(self):
         super().__init__("Counter-Trend", "EXTREME")
-        self.min_confidence = 0.70
+        self.min_confidence = 0.55  # 🔥 LOWER (was 0.70) → more signals!
         self.patterns = CandlePatterns()
     
     def analyze(self, df: pd.DataFrame, symbol_info: Dict) -> Optional[Dict]:

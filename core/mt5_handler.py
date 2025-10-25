@@ -120,10 +120,15 @@ class MT5Handler:
             (account_dict['margin_free'] / account_dict['equity'] * 100)
             if account_dict['equity'] > 0 else 0
         )
-        account_dict['margin_level'] = (
-            (account_dict['equity'] / account_dict['margin'] * 100)
-            if account_dict['margin'] > 0 else 0
-        )
+        
+        # 🔥 CRITICAL FIX: Margin level calculation
+        # If no positions open (margin=0), margin level should be VERY HIGH (healthy), not 0 (dangerous)!
+        if account_dict['margin'] > 0:
+            account_dict['margin_level'] = (account_dict['equity'] / account_dict['margin']) * 100
+        else:
+            # No positions = infinite margin level (very healthy)
+            # Use very high number to represent this
+            account_dict['margin_level'] = 99999.0
         
         self.account_info = account_dict
         return account_dict
@@ -221,6 +226,141 @@ class MT5Handler:
         
         return df
     
+    @retry_on_disconnect(max_attempts=3, delay=5)
+    def get_candles_batch(
+        self, 
+        symbol: str, 
+        timeframe: str, 
+        total_count: int,
+        batch_size: int = 10000
+    ) -> pd.DataFrame:
+        """
+        Get large amounts of historical candles in batches
+        
+        Args:
+            symbol: Trading symbol (e.g., XAUUSDm)
+            timeframe: Timeframe (M5, M15, H1, H4, D1)
+            total_count: Total number of candles needed
+            batch_size: Number of candles per batch (max 10000 for MT5)
+        """
+        logger.info(f"Collecting {total_count:,} candles in batches of {batch_size:,}...")
+        
+        all_data = []
+        remaining = total_count
+        shift = 0
+        
+        while remaining > 0:
+            # Calculate batch size for this iteration
+            current_batch_size = min(batch_size, remaining)
+            
+            logger.info(f"Fetching batch: {current_batch_size:,} candles (shift: {shift})...")
+            
+            try:
+                batch_df = self.get_candles(symbol, timeframe, current_batch_size, shift)
+                
+                if batch_df is None or len(batch_df) == 0:
+                    logger.warning(f"No data returned for batch at shift {shift}")
+                    break
+                
+                all_data.append(batch_df)
+                remaining -= len(batch_df)
+                shift += len(batch_df)
+                
+                logger.info(f"✅ Collected {len(batch_df):,} candles. Remaining: {remaining:,}")
+                
+                # Small delay to avoid overwhelming MT5
+                time.sleep(0.1)
+                
+            except Exception as e:
+                logger.error(f"Error in batch collection: {str(e)}")
+                break
+        
+        if not all_data:
+            raise Exception("No data collected in any batch")
+        
+        # Combine all batches
+        combined_df = pd.concat(all_data, ignore_index=True)
+        
+        # Remove duplicates and sort by time
+        combined_df = combined_df.drop_duplicates(subset=['time']).sort_values('time').reset_index(drop=True)
+        
+        logger.info(f"✅ Total collected: {len(combined_df):,} candles")
+        
+        return combined_df
+    
+    @retry_on_disconnect()
+    def get_candles_range(
+        self,
+        symbol: str,
+        timeframe: str,
+        start_date: datetime,
+        end_date: datetime
+    ) -> pd.DataFrame:
+        """
+        🔥 NEW: Get historical candles within a specific date range
+        (For backtesting with specific date periods)
+        
+        Args:
+            symbol: Trading symbol (e.g., XAUUSDm)
+            timeframe: Timeframe (M5, M15, H1, H4, D1)
+            start_date: Start datetime (timezone-aware)
+            end_date: End datetime (timezone-aware)
+        
+        Returns:
+            DataFrame with candles in the specified range
+        """
+        # Convert timeframe string to MT5 constant
+        tf_map = {
+            'M1': mt5.TIMEFRAME_M1,
+            'M5': mt5.TIMEFRAME_M5,
+            'M15': mt5.TIMEFRAME_M15,
+            'M30': mt5.TIMEFRAME_M30,
+            'H1': mt5.TIMEFRAME_H1,
+            'H4': mt5.TIMEFRAME_H4,
+            'D1': mt5.TIMEFRAME_D1,
+            'W1': mt5.TIMEFRAME_W1,
+        }
+        
+        if timeframe not in tf_map:
+            raise ValueError(f"Invalid timeframe: {timeframe}")
+        
+        mt5_timeframe = tf_map[timeframe]
+        
+        # Get rates using copy_rates_range (specific for date ranges)
+        rates = mt5.copy_rates_range(symbol, mt5_timeframe, start_date, end_date)
+        
+        if rates is None or len(rates) == 0:
+            error = mt5.last_error()
+            raise Exception(f"Failed to get candles in range {start_date} to {end_date}: {error}")
+        
+        # Convert to DataFrame (same as get_candles)
+        df = pd.DataFrame(rates)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        
+        # Calculate additional indicators
+        df['hl2'] = (df['high'] + df['low']) / 2
+        df['hlc3'] = (df['high'] + df['low'] + df['close']) / 3
+        df['ohlc4'] = (df['open'] + df['high'] + df['low'] + df['close']) / 4
+        
+        # Price change
+        df['change'] = df['close'] - df['open']
+        df['change_pct'] = (df['change'] / df['open']) * 100
+        
+        # Range
+        df['range'] = df['high'] - df['low']
+        df['body'] = abs(df['close'] - df['open'])
+        df['upper_wick'] = df['high'] - df[['open', 'close']].max(axis=1)
+        df['lower_wick'] = df[['open', 'close']].min(axis=1) - df['low']
+        
+        # Candle type
+        df['is_bullish'] = df['close'] > df['open']
+        df['is_bearish'] = df['close'] < df['open']
+        df['is_doji'] = abs(df['change_pct']) < 0.1
+        
+        logger.info(f"✅ Fetched {len(df):,} candles from {start_date.date()} to {end_date.date()}")
+        
+        return df
+    
     @retry_on_disconnect()
     def get_tick(self, symbol: str) -> Optional[Dict]:
         """Get latest tick data"""
@@ -236,6 +376,31 @@ class MT5Handler:
             'volume': tick.volume,
             'spread': tick.ask - tick.bid,
         }
+    
+    def get_calendar_events(self) -> List[Dict]:
+        """
+        🔥 Get economic calendar from TradingEconomics API
+        (MT5 calendar not supported in all versions)
+        
+        Returns:
+            List of high-impact economic events
+        """
+        try:
+            from data.calendar_scraper import EconomicCalendarScraper
+            import os
+            
+            api_key = os.getenv('TRADING_ECONOMICS_KEY', 'cd83fd1ed69545d:ivc5icl7su21s5m')
+            scraper = EconomicCalendarScraper(api_key=api_key)
+            
+            # Get high-impact events for next 7 days
+            events = scraper.get_calendar_events(importance='high')
+            
+            logger.info(f"📅 Found {len(events)} high-impact events from TradingEconomics")
+            return events
+            
+        except Exception as e:
+            logger.error(f"Failed to get calendar: {e}")
+            return []
     
     @retry_on_disconnect()
     def get_positions(self, symbol: Optional[str] = None) -> List[Dict]:
@@ -394,5 +559,9 @@ if __name__ == "__main__":
         # Get positions
         positions = handler.get_positions()
         print(f"\nOpen positions: {len(positions)}")
+        
+        # Get economic calendar
+        events = handler.get_calendar_events()
+        print(f"\nUpcoming high-impact events: {len(events)}")
         
         handler.shutdown()
