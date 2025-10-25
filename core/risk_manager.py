@@ -16,7 +16,7 @@ class RiskManager:
         max_risk_per_trade: float = 1.0,  # % of balance
         max_daily_loss: float = 5.0,      # % of balance
         max_trades_per_day: int = 10,
-        max_open_positions: int = 3,
+        max_open_positions: int = 5,
         max_correlation_exposure: float = 0.7
     ):
         self.mt5 = mt5_handler
@@ -284,7 +284,7 @@ class RiskManager:
         # Simplified correlation check
         # In production, use actual correlation matrix
         correlated_symbols = {
-            'XAUUSDm': ['XAGUSD'],
+            'BTCUSDm': ['XAGUSD'],
             'EURUSD': ['GBPUSD', 'AUDUSD'],
             'USDJPY': ['EURJPY', 'GBPJPY'],
         }
@@ -305,7 +305,7 @@ class RiskManager:
         
         return winning_trades / len(recent_trades) if recent_trades else 0.5
     
-    def check_drawdown(self, max_drawdown_percent: float = 20.0) -> Tuple[bool, float]:
+    def check_drawdown(self, max_drawdown_percent: float = 50.0) -> Tuple[bool, float]:  # 🔥 NAIKKAN dari 20% ke 50%
         """
         Check if current drawdown exceeds limit
         
@@ -394,12 +394,12 @@ if __name__ == "__main__":
         risk_mgr = RiskManager(mt5)
         
         # Check if can trade
-        can_trade, reason = risk_mgr.can_trade("XAUUSDm")
+        can_trade, reason = risk_mgr.can_trade("BTCUSDm")
         print(f"Can trade: {can_trade} ({reason})")
         
         # Calculate position size
         lot_size = risk_mgr.calculate_position_size(
-            symbol="XAUUSDm",
+            symbol="BTCUSDm",
             stop_loss_pips=30,
             confidence=0.75,
             news_impact=3
