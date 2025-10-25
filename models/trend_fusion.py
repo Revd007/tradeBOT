@@ -247,10 +247,10 @@ if __name__ == "__main__":
         
         # Get strategy signals
         strategy_mgr = StrategyManager(mt5)
-        strategy_signals = strategy_mgr.analyze_all("XAUUSDm")
+        strategy_signals = strategy_mgr.analyze_all("BTCUSDm")
         
         # Run fusion analysis
-        fusion_result = fusion.analyze("XAUUSDm", mt5, strategy_signals)
+        fusion_result = fusion.analyze("BTCUSDm", mt5, strategy_signals)
         
         # Print report
         print(fusion.format_analysis_report(fusion_result))

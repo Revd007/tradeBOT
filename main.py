@@ -308,7 +308,7 @@ class TradingBotEngine:
             
             symbol_info = self.mt5.get_symbol_info(symbol)
             if symbol_info:
-                # 🔥 VERY LENIENT: Minimal 30 pips untuk XAUUSD
+                # 🔥 VERY LENIENT: Minimal 30 pips untuk BTCUSD
                 min_volatility = symbol_info['point'] * 30  # Turun dari 50 → 30
                 
                 if avg_atr < min_volatility:
@@ -799,12 +799,12 @@ class TradingBotEngine:
         
         logger.info("🛑 Auto-trade loop stopped")
     
-    def train_cls_models(self, symbol: str = 'XAUUSDm', model_type: str = 'random_forest'):
+    def train_cls_models(self, symbol: str = 'BTCUSDm', model_type: str = 'random_forest'):
         """
         Train CLS models for all timeframes
         
         Args:
-            symbol: Trading symbol (default: XAUUSDm)
+            symbol: Trading symbol (default: BTCUSDm)
             model_type: Model type to train ('random_forest' or 'gradient_boosting')
         """
         logger.info(f"🎓 Starting CLS model training for {symbol}...")
@@ -833,7 +833,7 @@ class TradingBotEngine:
             logger.error(f"❌ Error during model training: {str(e)}", exc_info=True)
             return False
     
-    def retrain_single_timeframe(self, timeframe: str, symbol: str = 'XAUUSDm', model_type: str = 'random_forest'):
+    def retrain_single_timeframe(self, timeframe: str, symbol: str = 'BTCUSDm', model_type: str = 'random_forest'):
         """
         Retrain a single timeframe model
         

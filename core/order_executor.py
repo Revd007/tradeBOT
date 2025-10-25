@@ -480,7 +480,7 @@ if __name__ == "__main__":
         
         # Place buy order
         success, result = executor.place_market_order(
-            symbol="XAUUSDm",
+            symbol="BTCUSDm",
             order_type="BUY",
             lot_size=0.01,
             stop_loss=3800.00,

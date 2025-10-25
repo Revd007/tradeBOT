@@ -208,9 +208,9 @@ if __name__ == "__main__":
         strategy = MeanReversionStrategy()
         
         # Get test data
-        df = mt5.get_candles("XAUUSDm", "M5", count=200)
+        df = mt5.get_candles("BTCUSDm", "M5", count=200)
         df = strategy.add_all_indicators(df)
-        symbol_info = mt5.get_symbol_info("XAUUSDm")
+        symbol_info = mt5.get_symbol_info("BTCUSDm")
         
         # Test analysis
         signal = strategy.analyze(df, symbol_info)

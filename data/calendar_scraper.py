@@ -334,7 +334,7 @@ class EconomicCalendarScraper:
         Check if there are high-impact news events soon
         
         Args:
-            symbol: Trading symbol (e.g., XAUUSDm, EURUSD)
+            symbol: Trading symbol (e.g., BTCUSDm, EURUSD)
             buffer_minutes: Minutes before/after event to avoid trading
         
         Returns:
@@ -377,7 +377,7 @@ class EconomicCalendarScraper:
     def _get_symbol_currencies(self, symbol: str) -> List[str]:
         """Extract currencies from trading symbol"""
         # Gold/Silver symbols
-        if symbol.startswith('XAU') or symbol.startswith('XAG'):
+        if symbol.startswith('BTC') or symbol.startswith('XAG'):
             return ['USD']
         
         # Forex pairs
@@ -480,11 +480,11 @@ if __name__ == "__main__":
         print(f"  Impact Score: {impact:.1f}/10")
         print()
     
-    # Check news conflict for XAUUSDm
-    conflict = scraper.check_news_conflict('XAUUSDm', buffer_minutes=30)
+    # Check news conflict for BTCUSDm
+    conflict = scraper.check_news_conflict('BTCUSDm', buffer_minutes=30)
     
     print(f"\n{'='*60}")
-    print(f"News Conflict Check for XAUUSDm")
+    print(f"News Conflict Check for BTCUSDm")
     print(f"{'='*60}\n")
     print(f"Has Conflict: {conflict['has_conflict']}")
     print(f"Should Pause: {conflict['should_pause']}")

@@ -285,10 +285,10 @@ if __name__ == "__main__":
     if mt5.initialize():
         strategy = FibonacciATRStrategy()
         
-        df = mt5.get_candles("XAUUSDm", "H1", count=200)
+        df = mt5.get_candles("BTCUSDm", "H1", count=200)
         df = strategy.add_all_indicators(df)
         
-        signal = strategy.analyze(df, mt5.get_symbol_info("XAUUSDm"))
+        signal = strategy.analyze(df, mt5.get_symbol_info("BTCUSDm"))
         
         if signal:
             print(f"\n{'='*70}")

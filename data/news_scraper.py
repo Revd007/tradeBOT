@@ -14,19 +14,19 @@ class NewsAPI:
         self.api_key = api_key
         self.base_url = "https://newsapi.org/v2"
         self.forex_keywords = [
-            'gold', 'XAUUSDm', 'forex', 'fed', 'dollar', 'currency',
+            'gold', 'BTCUSDm', 'forex', 'fed', 'dollar', 'currency',
             'interest rate', 'inflation', 'central bank', 'trading'
         ]
         
         # 🔥 ENHANCED: Gold-specific keywords for better relevance
         self.gold_keywords = [
-            'gold', 'precious metals', 'XAU', 'safe haven', 
+            'gold', 'precious metals', 'BTC', 'safe haven', 
             'gold price', 'gold trading', 'bullion'
         ]
     
     def get_historical_news(
         self,
-        symbol: str = 'XAUUSDm',
+        symbol: str = 'BTCUSDm',
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         language: str = 'en'
@@ -50,7 +50,7 @@ class NewsAPI:
         try:
             # Map symbols to keywords
             keyword_map = {
-                'XAUUSDm': 'gold OR "gold price" OR "precious metals"',
+                'BTCUSDm': 'gold OR "gold price" OR "precious metals"',
                 'EURUSD': 'euro OR "EUR/USD" OR "european central bank"',
                 'GBPUSD': 'pound OR "GBP/USD" OR "bank of england"',
                 'USDJPY': 'yen OR "USD/JPY" OR "bank of japan"'
@@ -527,7 +527,7 @@ if __name__ == "__main__":
     news_api = NewsAPI("your_api_key_here")
     
     # Get latest news
-    news = news_api.get_latest_news("XAUUSDm", hours_ago=12)
+    news = news_api.get_latest_news("BTCUSDm", hours_ago=12)
     print(f"Found {len(news)} news articles")
     
     for article in news[:3]:
@@ -535,7 +535,7 @@ if __name__ == "__main__":
         print(f"Sentiment: {article['sentiment']['label']} ({article['sentiment']['score']:.2f})")
     
     # Get market sentiment
-    sentiment = news_api.get_market_sentiment("XAUUSDm")
+    sentiment = news_api.get_market_sentiment("BTCUSDm")
     print(f"\nOverall sentiment: {sentiment}")
     
     # Test calendar
@@ -548,7 +548,7 @@ if __name__ == "__main__":
     
     # Test news filter
     news_filter = NewsFilter("your_api_key", None)
-    can_trade, reason, info = news_filter.should_trade("XAUUSDm")
+    can_trade, reason, info = news_filter.should_trade("BTCUSDm")
     
     print(f"\nCan trade: {can_trade}")
     print(f"Reason: {reason}")

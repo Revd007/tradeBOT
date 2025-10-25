@@ -48,7 +48,7 @@ class StrategyManager:
         Run all enabled strategies and return aggregated results
         
         Args:
-            symbol: Trading symbol (e.g., XAUUSDm)
+            symbol: Trading symbol (e.g., BTCUSDm)
             timeframe: Timeframe to analyze
         
         Returns:
@@ -242,12 +242,12 @@ if __name__ == "__main__":
         # Initialize manager with all strategies
         manager = StrategyManager(mt5)
         
-        # Analyze XAUUSDm on M5 timeframe
+        # Analyze BTCUSDm on M5 timeframe
         print("\n" + "="*70)
-        print("ANALYZING XAUUSDm M5")
+        print("ANALYZING BTCUSDm M5")
         print("="*70)
         
-        result = manager.analyze_all("XAUUSDm", "M5")
+        result = manager.analyze_all("BTCUSDm", "M5")
         
         # Print formatted report
         print(manager.format_analysis_report(result))
@@ -258,7 +258,7 @@ if __name__ == "__main__":
         print("="*70)
         
         manager2 = StrategyManager(mt5, enabled_strategies=['breakout', 'fibonacci_atr'])
-        result2 = manager2.analyze_all("XAUUSDm", "H1")
+        result2 = manager2.analyze_all("BTCUSDm", "H1")
         print(manager2.format_analysis_report(result2))
         
         # Test strategy enable/disable

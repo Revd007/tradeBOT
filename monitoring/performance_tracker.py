@@ -1,61 +1,86 @@
 """
 Performance Tracker
 Track and analyze trading performance metrics
+
+🔥 UPGRADED: Now uses SQLite for fast, scalable performance analysis
 """
 
 import pandas as pd
 import json
+import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import logging
+from monitoring.telegram_bot import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
 
 class PerformanceTracker:
-    """Track and analyze trading performance"""
+    """Track and analyze trading performance with SQLite database"""
     
     def __init__(
         self,
         mt5_handler,
         save_to_firebase: bool = False,
-        history_file: str = "./data/trade_history.json"
+        db_path: str = "./data/trading_performance.db"
     ):
         """
         Args:
             mt5_handler: MT5 connection
             save_to_firebase: Save to Firebase (optional)
-            history_file: Local trade history file
+            db_path: SQLite database path
         """
         self.mt5 = mt5_handler
         self.save_to_firebase = save_to_firebase
-        self.history_file = Path(history_file)
-        self.history_file.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
-        self.trade_history = self._load_history()
+        # 🔥 NEW: Connect to SQLite database
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self._init_database()
+        
+        logger.info(f"✅ PerformanceTracker connected to SQLite: {self.db_path}")
         
         if save_to_firebase:
             self._init_firebase()
     
-    def _load_history(self) -> List[Dict]:
-        """Load trade history from file"""
-        if self.history_file.exists():
-            try:
-                with open(self.history_file, 'r') as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.error(f"Error loading history: {str(e)}")
-                return []
-        return []
-    
-    def _save_history(self):
-        """Save trade history to file"""
-        try:
-            with open(self.history_file, 'w') as f:
-                json.dump(self.trade_history, f, indent=2, default=str)
-        except Exception as e:
-            logger.error(f"Error saving history: {str(e)}")
+    def _init_database(self):
+        """🔥 NEW: Initialize SQLite database schema"""
+        cursor = self.conn.cursor()
+        
+        # Create trade_history table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket INTEGER,
+                symbol TEXT NOT NULL,
+                type TEXT NOT NULL,
+                lot_size REAL NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                stop_loss REAL,
+                take_profit REAL,
+                profit REAL NOT NULL,
+                profit_pips REAL,
+                open_time TEXT NOT NULL,
+                close_time TEXT NOT NULL,
+                strategy TEXT,
+                confidence REAL,
+                reason TEXT,
+                recorded_at TEXT NOT NULL,
+                UNIQUE(ticket, open_time)
+            )
+        ''')
+        
+        # Create indexes for fast queries
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_close_time ON trade_history(close_time)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_strategy ON trade_history(strategy)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_symbol ON trade_history(symbol)')
+        
+        self.conn.commit()
+        logger.info("✅ Database schema initialized")
     
     def _init_firebase(self):
         """Initialize Firebase (optional)"""
@@ -76,49 +101,54 @@ class PerformanceTracker:
             logger.warning(f"Firebase init failed: {str(e)}")
             self.save_to_firebase = False
     
-    def record_trade(self, trade_data: Dict):
+    def record_trade(self, trade_data: Dict, telegram_notifier=None):
         """
-        Record a completed trade
+        🔥 UPGRADED: Record trade to SQLite database + AI-powered notifications
         
         Args:
-            trade_data: {
-                'ticket': int,
-                'symbol': str,
-                'type': 'BUY' or 'SELL',
-                'lot_size': float,
-                'entry_price': float,
-                'exit_price': float,
-                'stop_loss': float,
-                'take_profit': float,
-                'profit': float,
-                'profit_pips': float,
-                'open_time': datetime,
-                'close_time': datetime,
-                'strategy': str,
-                'confidence': float,
-                'reason': str
-            }
+            trade_data: Trade information dict
+            telegram_notifier: TelegramNotifier instance for AI insights
         """
         trade_record = {
             **trade_data,
             'recorded_at': datetime.now().isoformat()
         }
         
-        self.trade_history.append(trade_record)
-        self._save_history()
+        # 🔥 NEW: Use pandas to_sql for easy SQLite insertion
+        df = pd.DataFrame([trade_record])
+        try:
+            df.to_sql('trade_history', self.conn, if_exists='append', index=False)
+            logger.info(f"✅ Trade recorded to SQLite: {trade_data['symbol']} {trade_data['type']} "
+                       f"Profit: ${trade_data['profit']:.2f}")
+            
+            # 🔥 NEW: Send AI-powered Telegram analysis
+            if telegram_notifier:
+                profit = trade_data.get('profit', 0)
+                
+                if profit > 0:
+                    # Profit analysis with RL/RAG insights
+                    telegram_notifier.send_profit_analysis(trade_data)
+                    logger.info("📱 Sent profit analysis via Telegram")
+                elif profit < 0:
+                    # Loss analysis with learning insights
+                    telegram_notifier.send_loss_analysis(trade_data)
+                    logger.info("📱 Sent loss analysis via Telegram")
+            
+        except sqlite3.IntegrityError:
+            logger.warning(f"⚠️  Duplicate trade (ticket={trade_data.get('ticket')}), skipped")
+        except Exception as e:
+            logger.error(f"❌ Error recording trade to SQLite: {e}")
         
+        # Optional: Also save to Firebase
         if self.save_to_firebase:
             try:
                 self.db.collection('trades').add(trade_record)
             except Exception as e:
                 logger.error(f"Error saving to Firebase: {str(e)}")
-        
-        logger.info(f"✅ Trade recorded: {trade_data['symbol']} {trade_data['type']} "
-                   f"Profit: ${trade_data['profit']:.2f}")
     
     def get_metrics(self, period_days: Optional[int] = None) -> Dict:
         """
-        Calculate performance metrics
+        🔥 UPGRADED: Calculate metrics directly from SQLite database
         
         Args:
             period_days: Period in days (None = all time)
@@ -126,20 +156,20 @@ class PerformanceTracker:
         Returns:
             Performance metrics dictionary
         """
-        # Filter by period
+        # 🔥 NEW: Query SQLite database instead of loading JSON
+        query = "SELECT * FROM trade_history"
         if period_days:
-            cutoff_date = datetime.now() - timedelta(days=period_days)
-            trades = [
-                t for t in self.trade_history
-                if datetime.fromisoformat(t['close_time']) > cutoff_date
-            ]
-        else:
-            trades = self.trade_history
+            cutoff_date = (datetime.now() - timedelta(days=period_days)).isoformat()
+            query += f" WHERE close_time >= '{cutoff_date}'"
         
-        if not trades:
+        try:
+            df = pd.read_sql(query, self.conn)
+        except (sqlite3.OperationalError, pd.io.sql.DatabaseError):
+            # Table doesn't exist or is empty
             return self._empty_metrics()
         
-        df = pd.DataFrame(trades)
+        if df.empty:
+            return self._empty_metrics()
         
         # Basic metrics
         total_trades = len(df)
@@ -314,7 +344,7 @@ if __name__ == "__main__":
         sample_trades = [
             {
                 'ticket': 12345,
-                'symbol': 'XAUUSDm',
+                'symbol': 'BTCUSDm',
                 'type': 'BUY',
                 'lot_size': 0.01,
                 'entry_price': 3850.00,

@@ -336,7 +336,7 @@ class CLSModelTrainer:
                         # NewsAPI free tier: only 30 days, so chunk if needed
                         logger.info(f"   📰 Fetching news sentiment from NewsAPI...")
                         articles = self.news_api.get_historical_news(
-                            symbol='XAUUSDm',
+                            symbol='BTCUSDm',
                             start_date=max(start_date, end_date - timedelta(days=30)),  # Last 30 days only
                             end_date=end_date
                         )
@@ -1554,7 +1554,7 @@ Keep response under 150 words.<｜end▁of▁sentence｜>"""
     def train_all_timeframes(
         self,
         mt5_handler,
-        symbol: str = 'XAUUSDm',
+        symbol: str = 'BTCUSDm',
         model_type: str = 'lightgbm'
     ):
         """
@@ -1654,7 +1654,7 @@ Keep response under 150 words.<｜end▁of▁sentence｜>"""
         self,
         mt5_handler,
         timeframe: str,
-        symbol: str = 'XAUUSDm',
+        symbol: str = 'BTCUSDm',
         model_type: str = 'random_forest'
     ):
         """Retrain a single timeframe model"""
@@ -1759,7 +1759,7 @@ if __name__ == "__main__":
     # Train all timeframes
     trainer.train_all_timeframes(
         mt5_handler=mt5,
-        symbol='XAUUSDm',
+        symbol='BTCUSDm',
         model_type='lightgbm'  # Options: 'lightgbm', 'xgboost', 'random_forest', 'gradient_boosting'
     )
     

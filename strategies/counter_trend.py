@@ -544,10 +544,10 @@ if __name__ == "__main__":
         # Test individual strategy
         strategy = CounterTrendStrategy()
         
-        df = mt5.get_candles("XAUUSDm", "M5", count=200)
+        df = mt5.get_candles("BTCUSDm", "M5", count=200)
         df = strategy.add_all_indicators(df)
         
-        signal = strategy.analyze(df, mt5.get_symbol_info("XAUUSDm"))
+        signal = strategy.analyze(df, mt5.get_symbol_info("BTCUSDm"))
         
         if signal:
             print(f"\nSignal detected:")
@@ -562,7 +562,7 @@ if __name__ == "__main__":
         
         # Test strategy manager
         manager = StrategyManager(mt5)
-        result = manager.analyze_all("XAUUSDm", "M5")
+        result = manager.analyze_all("BTCUSDm", "M5")
         
         print(f"\n--- Strategy Manager Results ---")
         print(f"Consensus: {result['consensus']}")
