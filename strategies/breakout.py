@@ -20,8 +20,9 @@ class BreakoutStrategy(BaseStrategy):
     
     def analyze(self, df: pd.DataFrame, symbol_info: Dict) -> Optional[Dict]:
         """
-        Look for breakout signals:
-        - Price breaking above/below key levels
+        🔥 IMPROVED: Look for breakout signals with:
+        - Closing confirmation (candle MUST close beyond level)
+        - Build-up filter (low volatility before breakout = stronger signal)
         - Volume confirmation
         - Momentum confirmation
         - Post-consolidation breakout
@@ -40,15 +41,41 @@ class BreakoutStrategy(BaseStrategy):
         atr = current['atr']
         is_consolidating = recent_range < atr * 3
         
-        # Bullish breakout conditions
+        # 🔥 NEW: Build-up Filter (Low volatility before breakout)
+        # Check if ATR in last 5-10 candles is significantly lower than normal
+        atr_recent = df['atr'].iloc[-10:-1].mean()  # Last 10 candles (excluding current)
+        atr_baseline = df['atr'].iloc[-30:-10].mean()  # Previous 20 candles
+        
+        # Build-up detected if recent ATR is < 70% of baseline
+        has_buildup = (atr_recent / atr_baseline) < 0.7 if atr_baseline > 0 else False
+        
+        logger.debug(f"   Build-up check: Recent ATR={atr_recent:.5f}, Baseline={atr_baseline:.5f}, Ratio={atr_recent/atr_baseline:.2f}")
+        if has_buildup:
+            logger.debug(f"   ✅ Build-up detected! (Low volatility → potential explosive breakout)")
+        
+        # 🔥 IMPROVED: Bullish breakout with CLOSING CONFIRMATION
         resistance_broken = False
+        closing_confirmed_bull = False
+        
         if levels['resistance']:
             nearest_resistance = min(levels['resistance'], key=lambda x: abs(x - current['close']))
+            
+            # OLD: Check if price crossed level
+            # NEW: Check if CANDLE CLOSED above level (confirmation!)
             resistance_broken = (previous['close'] < nearest_resistance and 
-                               current['close'] > nearest_resistance)
+                              current['close'] > nearest_resistance)
+            
+            # 🔥 CLOSING CONFIRMATION: Candle must CLOSE above level, not just wick
+            closing_confirmed_bull = (current['close'] > nearest_resistance and 
+                                     current['open'] < nearest_resistance)
+            
+            if resistance_broken:
+                logger.debug(f"   Resistance {nearest_resistance:.5f} broken. Close confirmed: {closing_confirmed_bull}")
         
         bullish_conditions = {
             'resistance_broken': resistance_broken,
+            'closing_confirmed': closing_confirmed_bull,  # 🔥 NEW
+            'buildup_detected': has_buildup,  # 🔥 NEW
             'volume_increase': current['tick_volume'] > df['tick_volume'].iloc[-20:-1].mean() * 1.5,
             'macd_positive': current['macd_hist'] > 0,
             'rsi_momentum': 50 < current['rsi'] < 70,
@@ -57,15 +84,27 @@ class BreakoutStrategy(BaseStrategy):
             'strong_candle': current['close'] > current['open'] and (current['close'] - current['open']) > atr * 0.5
         }
         
-        # Bearish breakout conditions
+        # 🔥 IMPROVED: Bearish breakout with CLOSING CONFIRMATION
         support_broken = False
+        closing_confirmed_bear = False
+        
         if levels['support']:
             nearest_support = min(levels['support'], key=lambda x: abs(x - current['close']))
+            
             support_broken = (previous['close'] > nearest_support and 
                             current['close'] < nearest_support)
+            
+            # 🔥 CLOSING CONFIRMATION: Candle must CLOSE below level
+            closing_confirmed_bear = (current['close'] < nearest_support and 
+                                     current['open'] > nearest_support)
+            
+            if support_broken:
+                logger.debug(f"   Support {nearest_support:.5f} broken. Close confirmed: {closing_confirmed_bear}")
         
         bearish_conditions = {
             'support_broken': support_broken,
+            'closing_confirmed': closing_confirmed_bear,  # 🔥 NEW
+            'buildup_detected': has_buildup,  # 🔥 NEW
             'volume_increase': current['tick_volume'] > df['tick_volume'].iloc[-20:-1].mean() * 1.5,
             'macd_negative': current['macd_hist'] < 0,
             'rsi_momentum': 30 < current['rsi'] < 50,
@@ -77,15 +116,39 @@ class BreakoutStrategy(BaseStrategy):
         bullish_score = self.calculate_score(bullish_conditions)
         bearish_score = self.calculate_score(bearish_conditions)
         
-        # Boost score if multiple conditions met
-        if resistance_broken and bullish_conditions['volume_increase']:
-            bullish_score += 0.10
-        if support_broken and bearish_conditions['volume_increase']:
-            bearish_score += 0.10
+        # 🔥 IMPROVED: Stronger boosts for high-quality breakouts
+        # Boost for confirmed close + volume
+        if closing_confirmed_bull and bullish_conditions['volume_increase']:
+            bullish_score += 0.15  # Increased from 0.10
+            logger.debug(f"   📈 Bullish boost: Closing confirmed + volume (+0.15)")
         
+        # Extra boost if build-up detected (indicates pressure)
+        if has_buildup and resistance_broken:
+            bullish_score += 0.10
+            logger.debug(f"   📈 Bullish boost: Build-up detected (+0.10)")
+        
+        if closing_confirmed_bear and bearish_conditions['volume_increase']:
+            bearish_score += 0.15  # Increased from 0.10
+            logger.debug(f"   📉 Bearish boost: Closing confirmed + volume (+0.15)")
+        
+        if has_buildup and support_broken:
+            bearish_score += 0.10
+            logger.debug(f"   📉 Bearish boost: Build-up detected (+0.10)")
+        
+        # 🔥 FILTER: Require closing confirmation for level breakouts
+        # (Consolidation breakouts don't need this strict requirement)
         if bullish_score >= self.min_confidence:
+            # If it's a level breakout, require closing confirmation
+            if resistance_broken and not closing_confirmed_bull:
+                logger.debug(f"   🚫 Bullish signal REJECTED: No closing confirmation")
+                return None
             return self._create_breakout_signal('BUY', df, symbol_info, bullish_score, bullish_conditions)
+        
         elif bearish_score >= self.min_confidence:
+            # If it's a level breakout, require closing confirmation
+            if support_broken and not closing_confirmed_bear:
+                logger.debug(f"   🚫 Bearish signal REJECTED: No closing confirmation")
+                return None
             return self._create_breakout_signal('SELL', df, symbol_info, bearish_score, bearish_conditions)
         
         return None
@@ -178,10 +241,10 @@ if __name__ == "__main__":
     if mt5.initialize():
         strategy = BreakoutStrategy()
         
-        df = mt5.get_candles("BTCUSDm", "M5", count=200)
+        df = mt5.get_candles("XAUUSDm", "M5", count=200)
         df = strategy.add_all_indicators(df)
         
-        signal = strategy.analyze(df, mt5.get_symbol_info("BTCUSDm"))
+        signal = strategy.analyze(df, mt5.get_symbol_info("XAUUSDm"))
         
         if signal:
             print(f"\n{'='*60}")

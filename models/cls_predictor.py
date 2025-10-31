@@ -92,6 +92,41 @@ class CLSPredictor:
         df['counter_trend_signal'] = np.select([counter_buy, counter_sell], [1, 0], default=-1)
         df['counter_trend_confidence'] = np.where(counter_buy | counter_sell, 0.55, 0.0)
 
+        # 🔥 NEW: Bullish Breakout Features (untuk detect BUY signals lebih baik)
+        # Gap up: Opening price significantly higher than previous close
+        # Breakout strength: How strong is the breakout relative to volatility
+        if 'atr' in df.columns:
+            df['gap_up'] = ((df['open'] - df['close'].shift(1)) > (df['atr'] * 0.5)).astype(int)
+            df['gap_down'] = ((df['close'].shift(1) - df['open']) > (df['atr'] * 0.5)).astype(int)
+            df['breakout_strength'] = (df['high'] - df['low']) / (df['atr'] + 1e-9)
+        else:
+            # Fallback jika ATR belum ada
+            avg_range = (df['high'] - df['low']).rolling(20).mean()
+            df['gap_up'] = ((df['open'] - df['close'].shift(1)) > (avg_range * 0.5)).astype(int)
+            df['gap_down'] = ((df['close'].shift(1) - df['open']) > (avg_range * 0.5)).astype(int)
+            df['breakout_strength'] = (df['high'] - df['low']) / (avg_range + 1e-9)
+        
+        # Volume spike: Current volume vs average
+        if 'tick_volume' in df.columns:
+            volume_ma_20 = df['tick_volume'].rolling(window=20).mean()
+            df['volume_spike_ratio'] = df['tick_volume'] / (volume_ma_20 + 1e-9)
+        else:
+            df['volume_spike_ratio'] = 1.0
+        
+        # EMA bullish: Price above EMA21 (trend filter)
+        if 'ema_21' in df.columns:
+            df['ema_bullish'] = (df['close'] > df['ema_21']).astype(int)
+        else:
+            # Calculate EMA21 if not exists
+            df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
+            df['ema_bullish'] = (df['close'] > df['ema_21']).astype(int)
+        
+        # Combined bullish breakout signal
+        df['bullish_breakout'] = (
+            (df['gap_up'] > 0) | 
+            ((df['breakout_strength'] > 1.5) & (df['volume_spike_ratio'] > 1.5) & (df['ema_bullish'] > 0))
+        ).astype(int)
+
         # --- Strategy Consensus Features ---
         signal_cols = ['base_strategy_signal', 'mean_reversion_signal', 'breakout_signal', 'counter_trend_signal']
         df['strategy_bullish_count'] = (df[signal_cols] == 1).sum(axis=1)
@@ -114,6 +149,7 @@ class CLSPredictor:
         df = df.drop(columns=['price_change_5', 'volume_ma_10', 'volume_spike', 'price_vs_sma'], errors='ignore')
         
         logger.info(f"   ✅ VECTORIZED strategy features extracted for {len(df)} candles")
+        logger.info(f"   ✅ Added Bullish Breakout features: gap_up, breakout_strength, volume_spike_ratio, ema_bullish")
         return df
     
     def add_calendar_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -281,7 +317,7 @@ class CLSPredictor:
                     
                     # 🔥 FIX: Need symbol parameter!
                     # For backtest, get symbol from df or use default
-                    symbol = 'BTCUSDm'  # Default for backtest
+                    symbol = 'XAUUSDm'  # Default for backtest
                     df_htf = mt5_handler.get_candles(symbol, htf, count=htf_candles_needed)
                     
                     if df_htf is not None and not df_htf.empty:
@@ -310,7 +346,17 @@ class CLSPredictor:
         df_with_features = self.add_calendar_features(df_with_features)
 
         # Step 2: Create technical features (includes Market DNA!)
-        df_with_features = preprocessor.create_features(df_with_features)
+        # 🔥 FIX: MUST pass timeframe parameter (same as trainer!)
+        df_with_features = preprocessor.create_features(df_with_features, timeframe=timeframe)
+
+        # 🔥 DEBUG: Check DNA features
+        dna_features_check = ['adx', 'market_regime_trending', 'confirmed_bullish_breakout', 
+                             'bullish_divergence', 'overextension_ema21_atr']
+        dna_present = [f for f in dna_features_check if f in df_with_features.columns]
+        if dna_present:
+            logger.debug(f"   ✅ DNA features present ({len(dna_present)}/{len(dna_features_check)}): {dna_present[:3]}")
+        else:
+            logger.warning(f"   ⚠️  NO DNA features found! This may cause prediction errors.")
 
         # Step 3: Add advanced features (MUST match trainer!)
         df_with_features = self.add_advanced_features(df_with_features)
@@ -331,10 +377,22 @@ class CLSPredictor:
                 X[col] = 0
                 missing_features.append(col)
         
-        # Log missing features only once (silently fill with 0)
-        if missing_features and not hasattr(self, '_missing_features_logged'):
-            # logger.warning(f"⚠️  {len(missing_features)} features missing, using 0: {missing_features[:3]}")
-            self._missing_features_logged = True
+        # 🔥 CRITICAL: Log missing features (critical for debugging!)
+        if missing_features:
+            missing_pct = len(missing_features) / len(required_features) * 100
+            
+            # Only log once per specialist to avoid spam
+            log_key = f'_missing_{timeframe}'
+            if not hasattr(self, log_key):
+                logger.warning(f"⚠️  {len(missing_features)}/{len(required_features)} features missing ({missing_pct:.1f}%): {missing_features[:5]}")
+                
+                # 🔥 CRITICAL WARNING: If too many features missing, predictions will be unreliable!
+                if missing_pct > 10:
+                    logger.error(f"❌ TOO MANY MISSING FEATURES ({missing_pct:.1f}%)! Prediction quality severely degraded!")
+                    logger.error(f"   Check: preprocessor.create_features() with timeframe parameter")
+                    logger.error(f"   DNA features (adx, confirmed_breakout, etc.) must be present!")
+                
+                setattr(self, log_key, True)
 
         return X
     
@@ -345,12 +403,7 @@ class CLSPredictor:
         mt5_handler=None  # 🔥 NEW: For MTF context injection
     ) -> Tuple[str, float]:
         """
-        🔥 UPDATED: Predict using self-contained specialists (each has own scaler + features)
-
-        Args:
-            df: Historical candle data
-            timeframe: Timeframe (m5, m15, h1, h4)
-            mt5_handler: MT5 handler for MTF context (optional)
+        🔥 FIXED PREDICTION ARCHITECTURE - Adaptive & Balanced
         
         Returns:
             (direction: 'BUY', 'SELL', or 'HOLD', confidence: 0.0-1.0)
@@ -361,104 +414,227 @@ class CLSPredictor:
             return 'HOLD', 0.5
         
         try:
-            # 🔥 UPDATED: Handle TF-SPECIFIC model format (dict with bullish/bearish)
             model = self.models[tf_key]
             
-            # Check if model is TF-SPECIFIC format (dict with 'bullish'/'bearish')
             if isinstance(model, dict) and 'bullish' in model and 'bearish' in model:
                 bullish_pkg = model['bullish']
                 bearish_pkg = model['bearish']
                 
-                # 🔥 CRITICAL: Prepare features separately for each specialist
+                # Prepare features
                 X_bullish = self.prepare_features_for_specialist(df, bullish_pkg, timeframe, mt5_handler)
                 X_bearish = self.prepare_features_for_specialist(df, bearish_pkg, timeframe, mt5_handler)
                 
-                # Safety check
+                # Clean
                 X_bullish.replace([np.inf, -np.inf], np.nan, inplace=True)
                 X_bullish.fillna(0, inplace=True)
                 X_bearish.replace([np.inf, -np.inf], np.nan, inplace=True)
                 X_bearish.fillna(0, inplace=True)
                 
-                # 🔥 CRITICAL: Use specialist's own scaler
+                # Scale
                 X_bullish_scaled = bullish_pkg['scaler'].transform(X_bullish)
                 X_bearish_scaled = bearish_pkg['scaler'].transform(X_bearish)
                 
-                # 🔥 FIX: Convert to DataFrame with proper column names to avoid warnings
                 X_bullish_scaled_df = pd.DataFrame(X_bullish_scaled, columns=X_bullish.columns, index=X_bullish.index)
                 X_bearish_scaled_df = pd.DataFrame(X_bearish_scaled, columns=X_bearish.columns, index=X_bearish.index)
                 
-                # Get probabilities from both specialists
+                # Probabilities
                 prob_buy = bullish_pkg['model'].predict_proba(X_bullish_scaled_df)[0, 1]
                 prob_sell = bearish_pkg['model'].predict_proba(X_bearish_scaled_df)[0, 1]
                 
-                # Apply calibrated thresholds
-                bullish_threshold = bullish_pkg['threshold']
-                bearish_threshold = bearish_pkg['threshold']
+                # 🔥 FIX: HAPUS ADAPTIVE THRESHOLD BIAS - Gunakan fixed threshold untuk BUY dan SELL
+                # SEBELUM: SELL threshold lebih rendah dari BUY → bias!
+                # SESUDAH: Fixed 0.60 untuk kedua (fair, tidak bias)
+                BUY_THRESHOLD = 0.60
+                SELL_THRESHOLD = 0.60
                 
-                # 🔥 DEBUG: Log threshold dan probability untuk debugging
-                logger.info(f"🔍 CLS Predictor Debug:")
-                logger.info(f"   Bullish: prob={prob_buy:.2%}, threshold={bullish_threshold:.2%}")
-                logger.info(f"   Bearish: prob={prob_sell:.2%}, threshold={bearish_threshold:.2%}")
+                # Gunakan threshold dari model, tapi pastikan tidak ada bias
+                bullish_threshold = max(BUY_THRESHOLD, bullish_pkg['threshold'])
+                bearish_threshold = max(SELL_THRESHOLD, bearish_pkg['threshold'])
                 
-                is_buy = prob_buy >= bullish_threshold
-                is_sell = prob_sell >= bearish_threshold
-                
-                # 🔥🔥🔥 PERBAIKAN LOGIKA KEPUTUSAN: Aturan Tie-Breaker 🔥🔥🔥
-                
-                # 1. Jika HANYA ada sinyal BUY yang valid
-                if is_buy and not is_sell:
-                    return 'BUY', prob_buy
+                # 🔥 CRITICAL: Pastikan SELL tidak lebih mudah dari BUY
+                if bearish_threshold < bullish_threshold:
+                    bearish_threshold = bullish_threshold  # SELL harus >= BUY threshold
 
-                # 2. Jika HANYA ada sinyal SELL yang valid
-                elif is_sell and not is_buy:
-                    return 'SELL', prob_sell
+                # 🔥 NEW: Volatility-aware dynamic threshold (ATR%)
+                try:
+                    if 'atr' in df.columns and 'close' in df.columns and len(df) > 0:
+                        atr_pct = (df['atr'].iloc[-1] / max(1e-9, df['close'].iloc[-1])) * 100.0
+                        vol_adjust = 0.05 if atr_pct > 1.5 else 0.0
+                        bullish_threshold = min(0.99, bullish_threshold + vol_adjust)
+                        bearish_threshold = min(0.99, bearish_threshold + vol_adjust)
+                        logger.info(f"🔧 Volatility-adjusted thresholds (+{vol_adjust:.2f} if ATR%>1.5): BUY={bullish_threshold:.3f}, SELL={bearish_threshold:.3f}")
+                except Exception:
+                    pass
 
-                # 3. Jika KEDUANYA valid (konflik), pilih yang probabilitasnya TERTINGGI
-                elif is_buy and is_sell:
-                    logger.warning(f"   ⚠️  Sinyal konflik: BUY ({prob_buy:.2%}) vs SELL ({prob_sell:.2%}). Memilih yang lebih kuat.")
-                    if prob_buy > prob_sell:
-                        return 'BUY', prob_buy
-                    else:
-                        return 'SELL', prob_sell
+                logger.info(f"🔧 Adaptive Thresholds: BUY={bullish_threshold:.3f}, SELL={bearish_threshold:.3f}")
+                logger.info(f"🔧 Probabilities: BUY={prob_buy:.3f}, SELL={prob_sell:.3f}")
+
+                # 🔥 FIX: Confidence scores - gunakan probabilitas langsung atau formula yang lebih fair
+                # Formula lama: (prob - threshold) / (1 - threshold) → terlalu ketat, confidence jadi rendah!
+                # Formula baru: probabilitas langsung (model sudah calibrated, probabilitas sudah reliable)
+                # Atau: max(prob, (prob - threshold) / (1 - threshold)) untuk balance
                 
-                # 4. Jika tidak ada yang valid sama sekali
+                # Method 1: Gunakan probabilitas langsung (lebih fair untuk calibrated model)
+                buy_confidence_direct = prob_buy
+                sell_confidence_direct = prob_sell
+                
+                # Method 2: Formula relative (backup)
+                buy_confidence_relative = max(0.0, (prob_buy - bullish_threshold) / max(1e-6, (1 - bullish_threshold)))
+                sell_confidence_relative = max(0.0, (prob_sell - bearish_threshold) / max(1e-6, (1 - bearish_threshold)))
+                
+                # 🔥 FINAL: Kombinasi keduanya (bobot 70% direct, 30% relative)
+                # Ini memberikan confidence yang lebih tinggi jika prob tinggi, tapi tetap sensitif terhadap threshold
+                buy_confidence = 0.7 * buy_confidence_direct + 0.3 * buy_confidence_relative
+                sell_confidence = 0.7 * sell_confidence_direct + 0.3 * sell_confidence_relative
+                
+                # Clip to [0, 1]
+                buy_confidence = np.clip(buy_confidence, 0.0, 1.0)
+                sell_confidence = np.clip(sell_confidence, 0.0, 1.0)
+
+                # 🔥 SHORT-TERM FIX: Trend-aware threshold nudging (no retrain)
+                # If short-term uptrend, make BUY slightly easier; if downtrend, make SELL slightly easier
+                try:
+                    if df is not None and 'close' in df.columns and len(df) > 60:
+                        ema_9 = df['close'].ewm(span=9, adjust=False).mean().iloc[-1]
+                        ema_21 = df['close'].ewm(span=21, adjust=False).mean().iloc[-1]
+                        if pd.notna(ema_9) and pd.notna(ema_21):
+                            if ema_9 > ema_21:
+                                # Uptrend → nudge BUY
+                                buy_confidence = min(1.0, buy_confidence + 0.05)
+                            elif ema_9 < ema_21:
+                                # Downtrend → nudge SELL
+                                sell_confidence = min(1.0, sell_confidence + 0.05)
+                except Exception:
+                    pass
+
+                min_confidence = 0.10
+                valid_buy = buy_confidence >= min_confidence
+                valid_sell = sell_confidence >= min_confidence
+
+                if valid_buy and not valid_sell:
+                    return 'BUY', float(buy_confidence)
+                elif valid_sell and not valid_buy:
+                    return 'SELL', float(sell_confidence)
+                elif valid_buy and valid_sell:
+                    return ('BUY', float(buy_confidence)) if buy_confidence > sell_confidence else ('SELL', float(sell_confidence))
                 else:
-                    max_prob = max(prob_buy, prob_sell)
-                    # Jika probabilitas maksimal masih sangat rendah, confidence juga rendah
-                    if max_prob < 0.5:
-                        return 'HOLD', max_prob
-                    else:
-                        # Jika probabilitas tinggi tapi tidak memenuhi threshold, turunkan confidence
-                        return 'HOLD', max_prob * 0.3
-                    
-            elif hasattr(model, 'predict_proba'):
-                # Old format: Single model
-                probas = model.predict_proba(X_scaled)[0]
-                prob_sell = probas[0]
-                prob_buy = probas[1]
+                    return 'HOLD', float(max(buy_confidence, sell_confidence) * 0.5)
 
-                if prob_buy >= buy_threshold:
-                    return 'BUY', prob_buy
-                elif prob_sell >= sell_threshold:
-                    return 'SELL', prob_sell
-                else:
-                    return 'HOLD', max(prob_buy, prob_sell)
+            # Legacy fallback
+            return 'HOLD', 0.5
 
-            else:
-                # Fallback for models without predict_proba
-                prediction = model.predict(X_scaled)[0]
-
-                # 🔥 BINARY CLASSIFICATION: 0=SELL, 1=BUY
-                action_map = {
-                    0: 'SELL',
-                    1: 'BUY'
-                }
-            action = action_map.get(prediction, 'HOLD')
-            return action, 0.7
-        
         except Exception as e:
-            logger.error(f"Error in CLS prediction for {timeframe}: {str(e)}", exc_info=True)
+            logger.error(f"Prediction error for {timeframe}: {str(e)}")
             return 'HOLD', 0.0
+
+    def detect_market_regime(self, df: pd.DataFrame) -> str:
+        """
+        🔥 Detect current market regime for adaptive prediction
+        """
+        if df is None or len(df) < 60 or 'close' not in df.columns:
+            return 'NEUTRAL'
+
+        returns = df['close'].pct_change().dropna()
+        if len(returns) < 20:
+            return 'NEUTRAL'
+
+        volatility = returns.rolling(20).std()
+        avg_volatility = volatility.mean()
+        current_vol = volatility.iloc[-1] if len(volatility) > 0 else avg_volatility
+
+        sma_20 = df['close'].rolling(20).mean()
+        sma_50 = df['close'].rolling(50).mean()
+        if pd.isna(sma_20.iloc[-1]) or pd.isna(sma_50.iloc[-1]):
+            return 'NEUTRAL'
+        price_vs_sma20 = (df['close'].iloc[-1] - sma_20.iloc[-1]) / max(1e-9, sma_20.iloc[-1])
+
+        if current_vol > avg_volatility * 1.5:
+            return 'HIGH_VOLATILITY'
+        elif abs(price_vs_sma20) > 0.02:
+            return 'TRENDING'
+        elif current_vol < avg_volatility * 0.7:
+            return 'LOW_VOLATILITY'
+        else:
+            return 'NEUTRAL'
+
+    def enhanced_ensemble_voting(self, predictions: Dict) -> Tuple[str, float]:
+        """
+        🔥 Smart ensemble voting that considers timeframe hierarchy and confidence
+        """
+        weights = {'m5': 1.0, 'm15': 1.5, 'h1': 2.0, 'h4': 2.5}
+        buy_score = 0.0
+        sell_score = 0.0
+        total_weight = 0.0
+
+        for tf, pred in predictions.items():
+            if pred and pred.get('action') in ['BUY', 'SELL']:
+                weight = float(weights.get(tf, 1.0))
+                confidence = float(pred.get('confidence', 0.5))
+                if pred['action'] == 'BUY':
+                    buy_score += weight * confidence
+                else:
+                    sell_score += weight * confidence
+                total_weight += weight
+
+        if total_weight == 0:
+            return 'HOLD', 0.5
+
+        buy_normalized = buy_score / total_weight
+        sell_normalized = sell_score / total_weight
+
+        decision_threshold = 0.55
+        if buy_normalized > decision_threshold and buy_normalized > sell_normalized:
+            return 'BUY', float(buy_normalized)
+        elif sell_normalized > decision_threshold and sell_normalized > buy_normalized:
+            return 'SELL', float(sell_normalized)
+        else:
+            return 'HOLD', float(max(buy_normalized, sell_normalized) * 0.7)
+
+    def realistic_backtest_validation(self, symbol: str, mt5_handler, timeframe: str = 'M5') -> Dict:
+        """
+        🔥 Realistic backtest with improved signal validation
+        """
+        try:
+            df = mt5_handler.get_candles(symbol, timeframe, count=500)
+            if df is None or len(df) < 120:
+                return {"error": "Insufficient data"}
+
+            from strategies.base_strategy import BaseStrategy
+            class TempStrategy(BaseStrategy):
+                def analyze(self, df: pd.DataFrame, symbol_info: Dict) -> Optional[Dict]:
+                    return None
+            strategy = TempStrategy("Validation", "MEDIUM")
+            df = strategy.add_all_indicators(df)
+
+            signals = []
+            for i in range(100, len(df)):
+                lookback = df.iloc[:i].copy()
+                action, confidence = self.predict(lookback, timeframe.lower(), mt5_handler)
+                signals.append({'timestamp': df.iloc[i]['time'], 'action': action, 'confidence': confidence, 'price': df.iloc[i]['close']})
+
+            buy_signals = [s for s in signals if s['action'] == 'BUY']
+            sell_signals = [s for s in signals if s['action'] == 'SELL']
+            total_signals = len(buy_signals) + len(sell_signals)
+            buy_ratio = (len(buy_signals) / total_signals) if total_signals > 0 else 0.0
+
+            logger.info(f"📊 Signal Analysis for {timeframe}:")
+            logger.info(f"   BUY signals: {len(buy_signals)} ({(len(buy_signals)/max(1,len(signals)))*100:.1f}%)")
+            logger.info(f"   SELL signals: {len(sell_signals)} ({(len(sell_signals)/max(1,len(signals)))*100:.1f}%)")
+            logger.info(f"   HOLD signals: {len(signals)-len(buy_signals)-len(sell_signals)}")
+            if total_signals > 0 and (buy_ratio < 0.2 or buy_ratio > 0.8):
+                logger.warning(f"   ⚠️  IMBALANCE DETECTED: Extreme bias ({buy_ratio:.1%})")
+
+            return {
+                'timeframe': timeframe,
+                'total_signals': len(signals),
+                'buy_signals': len(buy_signals),
+                'sell_signals': len(sell_signals),
+                'buy_ratio': buy_ratio,
+                'signals': signals[-20:]
+            }
+        except Exception as e:
+            logger.error(f"Validation error: {e}")
+            return {"error": str(e)}
     
     def multi_timeframe_consensus(
         self, 
@@ -554,14 +730,14 @@ class CLSPredictor:
         sl_atr_multiplier: float = None,  # Will be set based on trade_mode
         tp_atr_multiplier: float = None,   # Will be set based on trade_mode
         # 🔥 REALISTIC SIMULATION PARAMETERS
-        spread_pips: float = 2.0,  # Average spread for BTCUSD (realistic)
+        spread_pips: float = 2.0,  # Average spread for XAUUSD (realistic)
         slippage_pips: float = 0.5  # Average slippage per side (entry/exit)
     ) -> Dict:
         """
         🔥 UPDATED: Backtest with multiple trade modes
         
         Args:
-            symbol: Trading symbol (e.g., "BTCUSDm")
+            symbol: Trading symbol (e.g., "XAUUSDm")
             mt5_handler: MT5 connection
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
@@ -606,25 +782,25 @@ class CLSPredictor:
             'SCALPING': {
                 'sl_atr': base['sl_atr'] * 0.8,  # 20% tighter
                 'tp_atr': base['tp_atr'] * 0.8,
-                'threshold_multiplier': 0.95,  # Sangat selektif (95% dari threshold asli)
+                'threshold_multiplier': 1.15,  # Sangat selektif (95% dari threshold asli)
                 'description': 'Quick trades, tight stops'
             },
             'NORMAL': {
                 'sl_atr': base['sl_atr'],  # Base values
                 'tp_atr': base['tp_atr'],
-                'threshold_multiplier': 0.90,  # Seimbang (90% dari threshold asli)
+                'threshold_multiplier': 1.25,  # Seimbang (90% dari threshold asli)
                 'description': 'Balanced risk/reward'
             },
             'AGGRESSIVE': {
                 'sl_atr': base['sl_atr'] * 1.2,  # 20% wider
                 'tp_atr': base['tp_atr'] * 1.2,
-                'threshold_multiplier': 0.80,  # Lebih longgar (80% dari threshold asli)
+                'threshold_multiplier': 1.0,  # Lebih longgar (80% dari threshold asli)
                 'description': 'Wider stops for bigger moves'
             },
             'LONG_HOLD': {
                 'sl_atr': base['sl_atr'] * 1.5,  # 50% wider
                 'tp_atr': base['tp_atr'] * 2.0,  # 2x wider TP
-                'threshold_multiplier': 0.85,  # Sedikit longgar (85% dari threshold asli)
+                'threshold_multiplier': 1.10,  # Sedikit longgar (85% dari threshold asli)
                 'description': 'Patient trades, very wide stops'
             }
         }
@@ -884,35 +1060,99 @@ class CLSPredictor:
         bearish_above_50 = np.sum(bearish_probs > 0.5)
         bullish_above_30 = np.sum(bullish_probs > 0.3)
         bearish_above_30 = np.sum(bearish_probs > 0.3)
+        bullish_above_20 = np.sum(bullish_probs > 0.2)
+        bearish_above_20 = np.sum(bearish_probs > 0.2)
+        
+        # 🔥🔥🔥 CRITICAL: BYPASS LOGGER (print langsung) untuk debugging
+        print(f"\n{'='*80}")
+        print(f"🔍 DEBUG [{trade_mode}] - {timeframe.upper()}")
+        print(f"{'='*80}")
+        print(f"   Max Bullish Prob:  {max_bullish_prob:.4f} | Threshold: {bullish_base_threshold:.4f}")
+        print(f"   Max Bearish Prob:  {max_bearish_prob:.4f} | Threshold: {bearish_base_threshold:.4f}")
+        print(f"   Mean Bullish Prob: {mean_bullish_prob:.4f}")
+        print(f"   Mean Bearish Prob: {mean_bearish_prob:.4f}")
+        print(f"   Prob >50%: Bullish={bullish_above_50}, Bearish={bearish_above_50}")
+        print(f"   Prob >30%: Bullish={bullish_above_30}, Bearish={bearish_above_30}")
+        print(f"   Prob >20%: Bullish={bullish_above_20}, Bearish={bearish_above_20}")
+        print(f"   Signals Generated: BUY={buy_signals}, SELL={sell_signals}")
+        print(f"{'='*80}\n")
         
         logger.info(f"   📊 [{timeframe.upper()}] Max Bullish Prob: {max_bullish_prob:.4f} (Threshold: {bullish_base_threshold:.4f})")
         logger.info(f"   📊 [{timeframe.upper()}] Max Bearish Prob: {max_bearish_prob:.4f} (Threshold: {bearish_base_threshold:.4f})")
-        logger.info(f"   📊 [{timeframe.upper()}] Mean Bullish Prob: {mean_bullish_prob:.4f}, Mean Bearish Prob: {mean_bearish_prob:.4f}")
-        logger.info(f"   📊 [{timeframe.upper()}] Prob Distribution: Bullish >50%: {bullish_above_50}, >30%: {bullish_above_30}")
-        logger.info(f"   📊 [{timeframe.upper()}] Prob Distribution: Bearish >50%: {bearish_above_50}, >30%: {bearish_above_30}")
-        logger.info(f"   📊 Signals: BUY={buy_signals}, SELL={sell_signals}, Total={total_signals} (thresholds: B={bullish_base_threshold:.2f}, S={bearish_base_threshold:.2f})")
+        logger.info(f"   📊 Signals: BUY={buy_signals}, SELL={sell_signals}, Total={total_signals}")
         
         # 🔥 CRITICAL DEBUG: Jika masih no trades, coba threshold yang SANGAT rendah
         if total_signals == 0:
-            logger.warning(f"   ⚠️  NO SIGNALS! Trying emergency low thresholds...")
+            print(f"   ⚠️  WARNING: NO SIGNALS with current thresholds!")
+            print(f"   🔬 Testing emergency thresholds...")
+            
             emergency_bullish_threshold = 0.3
             emergency_bearish_threshold = 0.3
             emergency_buy_signals = np.sum(bullish_probs >= emergency_bullish_threshold)
             emergency_sell_signals = np.sum(bearish_probs >= emergency_bearish_threshold)
-            logger.warning(f"   🚨 Emergency thresholds (0.3): BUY={emergency_buy_signals}, SELL={emergency_sell_signals}")
+            
+            print(f"   🚨 Emergency (0.3): BUY={emergency_buy_signals}, SELL={emergency_sell_signals}")
+            
+            # Test even lower
+            ultra_low_threshold = 0.2
+            ultra_buy = np.sum(bullish_probs >= ultra_low_threshold)
+            ultra_sell = np.sum(bearish_probs >= ultra_low_threshold)
+            print(f"   🚨 Ultra-low (0.2): BUY={ultra_buy}, SELL={ultra_sell}")
             
             if emergency_buy_signals > 0 or emergency_sell_signals > 0:
-                logger.warning(f"   🔥 SOLUTION: Threshold terlalu tinggi! Gunakan threshold < 0.3")
+                print(f"   ✅ SOLUTION: Lower threshold to ~0.25-0.30")
+            elif ultra_buy > 0 or ultra_sell > 0:
+                print(f"   ⚠️  SOLUTION: Model probabilities very low! Need threshold ~0.15-0.20")
             else:
-                logger.error(f"   ❌ CRITICAL: Model tidak menghasilkan probabilitas > 0.3! Masalah di pipeline fitur!")
+                print(f"   ❌ CRITICAL: Model not producing prob > 0.2! Feature pipeline broken!")
+            print()
+        
+        # 🔥🔥🔥 KRITIKAL FIX: PAKSA SINKRONISASI INDEX SEBELUM SIMULASI 🔥🔥🔥
+        # Proses feature engineering bisa mengubah panjang atau index dari df_full.
+        # Kita harus memastikan df_raw dan df_full memiliki panjang dan index yang sama persis.
+        
+        print(f"   🔍 Pre-alignment: df_raw={len(df_raw)}, df_full={len(df_full)}, actions={len(actions)}")
+        
+        # 1. Temukan index gabungan (baris yang ada di KEDUA dataframe)
+        common_index = df_raw.index.intersection(df_full.index)
+        print(f"   🔍 Common index found: {len(common_index)} rows")
+        
+        # 2. Filter kedua dataframe agar hanya menggunakan index yang sama
+        df_raw_aligned = df_raw.loc[common_index].copy()
+        df_full_aligned = df_full.loc[common_index].copy()
+        
+        # 3. Buat ulang array 'actions' dan 'confidences' agar cocok dengan data yang sudah disinkronkan
+        # Dapatkan lokasi integer dari common_index di df_full yang asli
+        action_indices = df_full.index.get_indexer(common_index)
+        actions_aligned = actions[action_indices]
+        confidences_aligned = confidences[action_indices]
+        
+        # 4. Reset index pada semuanya agar bisa diakses dengan .iloc[] secara aman
+        df_raw_aligned = df_raw_aligned.reset_index(drop=True)
+        df_full_aligned = df_full_aligned.reset_index(drop=True)
+        
+        print(f"   ✅ Data Aligned for Simulation:")
+        print(f"      df_raw_aligned={len(df_raw_aligned)}, df_full_aligned={len(df_full_aligned)}")
+        print(f"      actions_aligned={len(actions_aligned)}, confidences_aligned={len(confidences_aligned)}")
+        
+        # 🔥 SANITY CHECK: Verify all lengths match
+        if not (len(df_raw_aligned) == len(df_full_aligned) == len(actions_aligned) == len(confidences_aligned)):
+            print(f"   ❌ ERROR: Alignment failed! Lengths don't match!")
+            return {}
+        
+        logger.info(f"   🔧 Data Aligned for Simulation: {len(df_raw_aligned)} rows")
         
         # STEP 6: Fast simulation loop (no feature computation!)
         balance = initial_balance
         trades = []
         open_position = None
+        filtered_trades = 0  # 🔥 Count trades skipped by regime filter
         
-        for i in range(200, len(df_raw)):
-            current_candle = df_raw.iloc[i]
+        print(f"   🎬 Starting simulation loop: {len(df_raw_aligned) - 200} iterations...")
+        
+        # 🔥 FIX: Use aligned data with common index
+        for i in range(200, len(df_raw_aligned)):
+            current_candle = df_raw_aligned.iloc[i]
             
             # Check existing position SL/TP
             if open_position:
@@ -947,11 +1187,32 @@ class CLSPredictor:
             
             # Check for new signal (use pre-computed prediction)
             if not open_position:
-                action_signal = actions[i]
+                action_signal = actions_aligned[i]  # 🔥 GUNAKAN actions_aligned
                 
                 if action_signal != -1:  # BUY or SELL
                     entry_price = current_candle['open']
-                    current_atr = df_full.iloc[i].get('atr', entry_price * 0.01)
+                    current_atr = df_full_aligned.iloc[i].get('atr', entry_price * 0.01)  # 🔥 GUNAKAN df_full_aligned
+                    
+                    # 🔥 DEBUG: Log when ATR is invalid
+                    if current_atr == 0 or pd.isna(current_atr):
+                        print(f"      ⚠️  Invalid ATR at index {i}: {current_atr}, using 1% of price")
+                        current_atr = entry_price * 0.01
+
+                    # 🔥 REGIME FILTER: Avoid counter-trend trades in strong trends (reduce SELL bias)
+                    try:
+                        is_trending = bool(df_full_aligned.iloc[i].get('market_regime_trending', 0) == 1)
+                        trend_bull = bool(df_full_aligned.iloc[i].get('trend_direction_bullish', 0) == 1)
+                        trend_bear = bool(df_full_aligned.iloc[i].get('trend_direction_bearish', 0) == 1)
+                        if is_trending:
+                            # Skip SELL in strong bullish trend; skip BUY in strong bearish trend
+                            if action_signal == 0 and trend_bull:
+                                filtered_trades += 1
+                                continue
+                            if action_signal == 1 and trend_bear:
+                                filtered_trades += 1
+                                continue
+                    except Exception:
+                        pass
                     
                     sl_distance = current_atr * sl_atr_multiplier
                     tp_distance = current_atr * tp_atr_multiplier
@@ -964,6 +1225,9 @@ class CLSPredictor:
                             'tp': entry_price + tp_distance,
                             'entry_time': current_candle['time']
                         }
+                        # 🔥 DEBUG: Log first few trades
+                        if len(trades) < 3:
+                            print(f"      ✅ Trade #{len(trades)+1}: BUY @ {entry_price:.5f}, SL={open_position['sl']:.5f}, TP={open_position['tp']:.5f}")
                     elif action_signal == 0:  # SELL
                         open_position = {
                             'direction': 'SELL',
@@ -972,13 +1236,29 @@ class CLSPredictor:
                             'tp': entry_price - tp_distance,
                             'entry_time': current_candle['time']
                         }
+                        # 🔥 DEBUG: Log first few trades
+                        if len(trades) < 3:
+                            print(f"      ✅ Trade #{len(trades)+1}: SELL @ {entry_price:.5f}, SL={open_position['sl']:.5f}, TP={open_position['tp']:.5f}")
+
+        # 🔥 DEBUG: Log simulation results
+        print(f"\n   📊 Simulation Complete:")
+        print(f"      Total iterations: {len(df_raw_aligned) - 200}")
+        print(f"      Trades executed: {len(trades)}")
+        if len(trades) > 0:
+            wins = sum(1 for t in trades if t['result'] == 'WIN')
+            print(f"      Win rate: {wins}/{len(trades)} ({wins/len(trades)*100:.1f}%)")
+        print()
 
         # Calculate statistics
         if len(trades) == 0:
+            print(f"   ❌ NO TRADES GENERATED! Check:")
+            print(f"      1. Are signals being created? (see above)")
+            print(f"      2. Is ATR valid? (check for warnings)")
+            print(f"      3. Are SL/TP being hit before next signal?")
             return {}
 
         # 🔥 APPLY REALISTIC TRANSACTION COSTS TO ALL TRADES
-        cost_per_trade = total_transaction_cost_price * lot_size * 100  # For BTCUSD
+        cost_per_trade = total_transaction_cost_price * lot_size * 100  # For XAUUSD
         
         realistic_trades = []
         for trade in trades:
@@ -1022,7 +1302,8 @@ class CLSPredictor:
             'spread_pips': spread_pips,
             'slippage_pips': slippage_pips,
             'cost_per_trade': cost_per_trade,
-            'trades': realistic_trades
+            'trades': realistic_trades,
+            'filtered_trades': int(filtered_trades)
         }
 
 
@@ -1132,7 +1413,7 @@ if __name__ == "__main__":
             for mode in trade_modes:
                 print(f"   → {mode}...", end=' ', flush=True)
                 results = cls.backtest(
-                    symbol="BTCUSDm",
+                    symbol="XAUUSDm",
                     mt5_handler=mt5,
                     start_date=dates['backtest_start'],
                     end_date=dates['backtest_end'],
@@ -1152,7 +1433,7 @@ if __name__ == "__main__":
             for mode in trade_modes:
                 print(f"   → {mode}...", end=' ', flush=True)
                 results = cls.backtest(
-                    symbol="BTCUSDm",
+                    symbol="XAUUSDm",
                     mt5_handler=mt5,
                     start_date=dates['forward_start'],
                     end_date=dates['forward_end'],

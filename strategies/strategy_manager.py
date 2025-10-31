@@ -45,19 +45,25 @@ class StrategyManager:
     
     def analyze_all(self, symbol: str, timeframe: str = 'M5') -> Dict:
         """
-        Run all enabled strategies and return aggregated results
+        🔥 IMPROVED: Run all enabled strategies with:
+        - Market Regime Filter (ADX-based)
+        - Weighted Consensus (risk-adjusted)
+        - Confluence Score (signal overlap bonus)
         
         Args:
-            symbol: Trading symbol (e.g., BTCUSDm)
+            symbol: Trading symbol (e.g., XAUUSDm)
             timeframe: Timeframe to analyze
         
         Returns:
             {
                 'best_signal': signal dict or None,
                 'all_signals': {strategy_name: signal},
+                'market_regime': Dict with regime info,
                 'consensus': 'BUY', 'SELL', or 'NEUTRAL',
                 'buy_count': int,
                 'sell_count': int,
+                'weighted_score': float,
+                'confluence_score': float,
                 'agreement_score': float (0-1)
             }
         """
@@ -69,17 +75,55 @@ class StrategyManager:
             return {
                 'best_signal': None,
                 'all_signals': {},
+                'market_regime': None,
                 'consensus': 'NEUTRAL',
                 'buy_count': 0,
                 'sell_count': 0,
+                'weighted_score': 0.0,
+                'confluence_score': 0.0,
+                'agreement_score': 0.0
+            }
+        
+        # 🔥 STEP 1: Detect Market Regime FIRST (most important!)
+        df_with_indicators = df.copy()
+        temp_strategy = self.strategies[list(self.strategies.keys())[0]]  # Use any strategy
+        df_with_indicators = temp_strategy.add_all_indicators(df_with_indicators)
+        
+        market_regime = temp_strategy.detect_market_regime(df_with_indicators)
+        
+        logger.info(f"📊 Market Regime: {market_regime['regime']} (ADX: {market_regime['adx']:.1f})")
+        logger.info(f"   Suitable strategies: {', '.join(market_regime['suitable_strategies']) if market_regime['suitable_strategies'] else 'None (avoid trading)'}")
+        
+        # 🔥 STEP 2: Filter strategies based on market regime
+        suitable_strategies = market_regime['suitable_strategies']
+        
+        if market_regime['regime'] == 'VOLATILE':
+            logger.warning("⚠️  VOLATILE market detected - skipping all strategies!")
+            return {
+                'best_signal': None,
+                'all_signals': {},
+                'market_regime': market_regime,
+                'consensus': 'NEUTRAL',
+                'buy_count': 0,
+                'sell_count': 0,
+                'weighted_score': 0.0,
+                'confluence_score': 0.0,
                 'agreement_score': 0.0
             }
         
         signals = {}
         
-        # Run each strategy
+        # 🔥 STEP 3: Run only SUITABLE strategies
         for name, strategy in self.strategies.items():
             try:
+                # 🔥 NEW: Check if strategy is suitable for current regime
+                strategy_name_formatted = strategy.name  # Use strategy's actual name
+                
+                if suitable_strategies and strategy_name_formatted not in suitable_strategies:
+                    logger.info(f"⚪ {name}: Skipped (not suitable for {market_regime['regime']} market)")
+                    signals[name] = None
+                    continue
+                
                 df_copy = df.copy()
                 df_copy = strategy.add_all_indicators(df_copy)
                 signal = strategy.analyze(df_copy, symbol_info)
@@ -95,43 +139,109 @@ class StrategyManager:
                     logger.info(f"⚪ {name}: No signal")
             
             except Exception as e:
-                logger.error(f"❌ Error in {name} strategy: {str(e)}")
+                logger.error(f"❌ Error in {name} strategy: {str(e)}", exc_info=True)
                 signals[name] = None
         
-        # Calculate consensus
-        buy_signals = [s for s in signals.values() if s and s['action'] == 'BUY']
-        sell_signals = [s for s in signals.values() if s and s['action'] == 'SELL']
+        # 🔥 STEP 4: Calculate WEIGHTED consensus
+        # Risk weights: LOW=1.5, MEDIUM=1.2, HIGH=1.0, EXTREME=0.8
+        risk_weights = {
+            'LOW': 1.5,
+            'MEDIUM': 1.2,
+            'HIGH': 1.0,
+            'EXTREME': 0.8
+        }
+        
+        buy_signals = []
+        sell_signals = []
+        buy_weighted_score = 0.0
+        sell_weighted_score = 0.0
+        
+        for name, signal in signals.items():
+            if signal:
+                weight = risk_weights.get(signal['risk_level'], 1.0)
+                weighted_confidence = signal['confidence'] * weight
+                
+                if signal['action'] == 'BUY':
+                    buy_signals.append(signal)
+                    buy_weighted_score += weighted_confidence
+                elif signal['action'] == 'SELL':
+                    sell_signals.append(signal)
+                    sell_weighted_score += weighted_confidence
+        
         total_signals = len([s for s in signals.values() if s])
         
-        # Determine consensus
-        if len(buy_signals) > len(sell_signals) and buy_signals:
+        # 🔥 STEP 5: Calculate Confluence Score
+        # Bonus if multiple strategies agree on same direction
+        confluence_score = 0.0
+        
+        if len(buy_signals) >= 2:
+            # Multiple BUY signals = strong confluence
+            confluence_score = min(len(buy_signals) * 0.15, 0.50)  # Cap at 50%
+            logger.info(f"   🎯 BUY Confluence: {len(buy_signals)} strategies agree (+{confluence_score:.1%} bonus)")
+        
+        if len(sell_signals) >= 2:
+            # Multiple SELL signals = strong confluence
+            confluence_score = min(len(sell_signals) * 0.15, 0.50)  # Cap at 50%
+            logger.info(f"   🎯 SELL Confluence: {len(sell_signals)} strategies agree (+{confluence_score:.1%} bonus)")
+        
+        # Apply confluence bonus to weighted scores
+        if buy_signals:
+            buy_weighted_score *= (1 + confluence_score)
+        if sell_signals:
+            sell_weighted_score *= (1 + confluence_score)
+        
+        # 🔥 STEP 6: Determine consensus based on weighted scores
+        if buy_weighted_score > sell_weighted_score and buy_signals:
             consensus = 'BUY'
-            agreement_score = len(buy_signals) / max(total_signals, 1)
-        elif len(sell_signals) > len(buy_signals) and sell_signals:
+            agreement_score = buy_weighted_score / max(buy_weighted_score + sell_weighted_score, 0.01)
+            weighted_score = buy_weighted_score
+        elif sell_weighted_score > buy_weighted_score and sell_signals:
             consensus = 'SELL'
-            agreement_score = len(sell_signals) / max(total_signals, 1)
+            agreement_score = sell_weighted_score / max(buy_weighted_score + sell_weighted_score, 0.01)
+            weighted_score = sell_weighted_score
         else:
             consensus = 'NEUTRAL'
             agreement_score = 0.5
+            weighted_score = 0.0
         
-        # Select best signal (highest confidence from consensus direction)
+        # 🔥 STEP 7: Handle conflicts (strong disagreement)
+        if len(buy_signals) >= 2 and len(sell_signals) >= 2:
+            logger.warning(f"⚠️  CONFLICT: {len(buy_signals)} BUY vs {len(sell_signals)} SELL signals")
+            logger.warning(f"   Scores: BUY={buy_weighted_score:.2f}, SELL={sell_weighted_score:.2f}")
+            
+            # If scores are very close, stay neutral
+            if abs(buy_weighted_score - sell_weighted_score) < 0.2:
+                consensus = 'NEUTRAL'
+                agreement_score = 0.0
+                weighted_score = 0.0
+                logger.warning(f"   🚫 NEUTRAL consensus due to conflicting signals")
+        
+        # 🔥 STEP 8: Select best signal (highest weighted confidence from consensus direction)
         best_signal = None
         if consensus == 'BUY':
-            best_signal = max(buy_signals, key=lambda s: s['confidence']) if buy_signals else None
+            # Select BUY signal with highest weighted confidence
+            best_signal = max(
+                buy_signals, 
+                key=lambda s: s['confidence'] * risk_weights.get(s['risk_level'], 1.0)
+            ) if buy_signals else None
         elif consensus == 'SELL':
-            best_signal = max(sell_signals, key=lambda s: s['confidence']) if sell_signals else None
-        else:
-            # If no consensus, take highest confidence overall
-            all_valid_signals = [s for s in signals.values() if s]
-            if all_valid_signals:
-                best_signal = max(all_valid_signals, key=lambda s: s['confidence'])
+            # Select SELL signal with highest weighted confidence
+            best_signal = max(
+                sell_signals, 
+                key=lambda s: s['confidence'] * risk_weights.get(s['risk_level'], 1.0)
+            ) if sell_signals else None
+        
+        logger.info(f"📊 Final Consensus: {consensus} (weighted score: {weighted_score:.2f}, confluence: {confluence_score:.1%})")
         
         return {
             'best_signal': best_signal,
             'all_signals': signals,
+            'market_regime': market_regime,
             'consensus': consensus,
             'buy_count': len(buy_signals),
             'sell_count': len(sell_signals),
+            'weighted_score': weighted_score,
+            'confluence_score': confluence_score,
             'agreement_score': agreement_score,
             'total_signals': total_signals
         }
@@ -184,21 +294,43 @@ class StrategyManager:
             logger.warning(f"Strategy not found: {strategy_name}")
     
     def format_analysis_report(self, analysis_result: Dict) -> str:
-        """Generate formatted analysis report"""
+        """🔥 IMPROVED: Generate formatted analysis report with market regime info"""
         consensus = analysis_result['consensus']
         buy_count = analysis_result['buy_count']
         sell_count = analysis_result['sell_count']
         agreement = analysis_result['agreement_score']
         best_signal = analysis_result['best_signal']
+        market_regime = analysis_result.get('market_regime')
         
         report = f"""
 ╔═══════════════════════════════════════════════════════════╗
 ║           STRATEGY MANAGER ANALYSIS REPORT                ║
 ╚═══════════════════════════════════════════════════════════╝
+"""
+        
+        # 🔥 NEW: Market Regime Section
+        if market_regime:
+            report += f"""
+🌐 MARKET REGIME: {market_regime['regime']}
+   ADX: {market_regime['adx']:.1f}
+   Trend Direction: {market_regime['trend_direction']}
+   Suitable Strategies: {', '.join(market_regime['suitable_strategies']) if market_regime['suitable_strategies'] else 'None (avoid trading)'}
+   Confidence: {market_regime['confidence']:.1%}
 
-📊 CONSENSUS: {consensus}
+"""
+        
+        # Consensus Section
+        report += f"""📊 CONSENSUS: {consensus}
 🎯 Agreement Score: {agreement:.1%}
-📈 Buy Signals: {buy_count}
+"""
+        
+        # 🔥 NEW: Weighted score and confluence
+        if 'weighted_score' in analysis_result:
+            report += f"""⚖️  Weighted Score: {analysis_result['weighted_score']:.2f}
+🎯 Confluence Bonus: {analysis_result.get('confluence_score', 0):.1%}
+"""
+        
+        report += f"""📈 Buy Signals: {buy_count}
 📉 Sell Signals: {sell_count}
 💡 Total Signals: {analysis_result['total_signals']}
 
@@ -242,12 +374,12 @@ if __name__ == "__main__":
         # Initialize manager with all strategies
         manager = StrategyManager(mt5)
         
-        # Analyze BTCUSDm on M5 timeframe
+        # Analyze XAUUSDm on M5 timeframe
         print("\n" + "="*70)
-        print("ANALYZING BTCUSDm M5")
+        print("ANALYZING XAUUSDm M5")
         print("="*70)
         
-        result = manager.analyze_all("BTCUSDm", "M5")
+        result = manager.analyze_all("XAUUSDm", "M5")
         
         # Print formatted report
         print(manager.format_analysis_report(result))
@@ -258,7 +390,7 @@ if __name__ == "__main__":
         print("="*70)
         
         manager2 = StrategyManager(mt5, enabled_strategies=['breakout', 'fibonacci_atr'])
-        result2 = manager2.analyze_all("BTCUSDm", "H1")
+        result2 = manager2.analyze_all("XAUUSDm", "H1")
         print(manager2.format_analysis_report(result2))
         
         # Test strategy enable/disable

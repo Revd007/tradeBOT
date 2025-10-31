@@ -344,7 +344,7 @@ if __name__ == "__main__":
         sample_trades = [
             {
                 'ticket': 12345,
-                'symbol': 'BTCUSDm',
+                'symbol': 'XAUUSDm',
                 'type': 'BUY',
                 'lot_size': 0.01,
                 'entry_price': 3850.00,

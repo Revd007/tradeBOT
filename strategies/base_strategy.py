@@ -147,6 +147,46 @@ class TechnicalIndicators:
                 '1.618': low + (1.618 * diff),
                 '2.618': low + (2.618 * diff),
             }
+    
+    @staticmethod
+    def calculate_adx(df: pd.DataFrame, period: int = 14) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        """
+        🔥 NEW: Calculate ADX (Average Directional Index)
+        
+        ADX measures trend strength (NOT direction):
+        - ADX > 25: Strong trend (use Breakout, Fibonacci strategies)
+        - ADX < 20: Weak/No trend, ranging market (use Counter-Trend, Mean Reversion)
+        
+        Returns:
+            (adx, plus_di, minus_di)
+        """
+        # Calculate True Range
+        high_low = df['high'] - df['low']
+        high_close = abs(df['high'] - df['close'].shift(1))
+        low_close = abs(df['low'] - df['close'].shift(1))
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        
+        # Calculate Directional Movement
+        high_diff = df['high'] - df['high'].shift(1)
+        low_diff = df['low'].shift(1) - df['low']
+        
+        plus_dm = high_diff.where((high_diff > low_diff) & (high_diff > 0), 0)
+        minus_dm = low_diff.where((low_diff > high_diff) & (low_diff > 0), 0)
+        
+        # Smooth with Wilder's smoothing (similar to EMA)
+        tr_smooth = tr.ewm(alpha=1/period, adjust=False).mean()
+        plus_dm_smooth = plus_dm.ewm(alpha=1/period, adjust=False).mean()
+        minus_dm_smooth = minus_dm.ewm(alpha=1/period, adjust=False).mean()
+        
+        # Calculate Directional Indicators
+        plus_di = 100 * (plus_dm_smooth / tr_smooth)
+        minus_di = 100 * (minus_dm_smooth / tr_smooth)
+        
+        # Calculate DX and ADX
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.ewm(alpha=1/period, adjust=False).mean()
+        
+        return adx, plus_di, minus_di
 
 
 class BaseStrategy(ABC):
@@ -207,6 +247,12 @@ class BaseStrategy(ABC):
         df['stoch_k'] = stoch_k
         df['stoch_d'] = stoch_d
         
+        # 🔥 NEW: ADX (Market Regime Detection)
+        adx, plus_di, minus_di = self.indicators.calculate_adx(df)
+        df['adx'] = adx
+        df['plus_di'] = plus_di
+        df['minus_di'] = minus_di
+        
         return df
     
     def detect_trend(self, df: pd.DataFrame) -> str:
@@ -241,6 +287,103 @@ class BaseStrategy(ABC):
             return 'BEARISH' if close < ema_21 else 'NEUTRAL'
         
         return 'NEUTRAL'
+    
+    def detect_market_regime(self, df: pd.DataFrame) -> Dict:
+        """
+        🔥 NEW: Detect market regime (condition) using ADX
+        
+        This is the MOST IMPORTANT filter for strategy selection!
+        Different strategies work in different market conditions.
+        
+        Returns:
+            {
+                'regime': 'TRENDING' | 'RANGING' | 'VOLATILE',
+                'adx': float,
+                'trend_direction': 'BULLISH' | 'BEARISH' | 'NEUTRAL',
+                'suitable_strategies': List[str],
+                'confidence': float (0-1)
+            }
+        """
+        # Calculate ADX if not present
+        if 'adx' not in df.columns:
+            adx, plus_di, minus_di = self.indicators.calculate_adx(df)
+            df['adx'] = adx
+            df['plus_di'] = plus_di
+            df['minus_di'] = minus_di
+        
+        current_adx = df['adx'].iloc[-1]
+        plus_di = df['plus_di'].iloc[-1]
+        minus_di = df['minus_di'].iloc[-1]
+        
+        # Calculate ATR for volatility check
+        if 'atr' not in df.columns:
+            df['atr'] = self.indicators.calculate_atr(df)
+        
+        atr_recent = df['atr'].iloc[-5:].mean()
+        atr_long = df['atr'].iloc[-20:].mean()
+        volatility_ratio = atr_recent / atr_long if atr_long > 0 else 1.0
+        
+        # Determine regime
+        if current_adx > 25:
+            # TRENDING MARKET
+            regime = 'TRENDING'
+            suitable_strategies = ['Breakout', 'Fibonacci-ATR']
+            confidence = min((current_adx - 25) / 25, 1.0)  # 0-1 scale
+            
+            # Determine trend direction
+            if plus_di > minus_di + 5:
+                trend_direction = 'BULLISH'
+            elif minus_di > plus_di + 5:
+                trend_direction = 'BEARISH'
+            else:
+                trend_direction = 'NEUTRAL'
+        
+        elif current_adx < 20:
+            # RANGING MARKET (weak or no trend)
+            regime = 'RANGING'
+            suitable_strategies = ['Counter-Trend', 'Mean-Reversion']
+            confidence = min((20 - current_adx) / 20, 1.0)
+            
+            # In ranging market, look for mean reversion opportunities
+            close = df['close'].iloc[-1]
+            ema_21 = df['ema_21'].iloc[-1] if 'ema_21' in df.columns else close
+            
+            if close > ema_21:
+                trend_direction = 'OVERBOUGHT'  # Likely to revert down
+            elif close < ema_21:
+                trend_direction = 'OVERSOLD'  # Likely to revert up
+            else:
+                trend_direction = 'NEUTRAL'
+        
+        else:
+            # TRANSITION ZONE (ADX between 20-25)
+            regime = 'TRANSITION'
+            suitable_strategies = ['Fibonacci-ATR', 'Counter-Trend']  # Use both cautiously
+            confidence = 0.5  # Low confidence in transition
+            trend_direction = 'NEUTRAL'
+        
+        # Check for VOLATILE market (extreme ATR increase)
+        if volatility_ratio > 1.5:
+            regime = 'VOLATILE'
+            suitable_strategies = []  # Better to avoid trading
+            confidence = 0.0
+            trend_direction = 'UNSTABLE'
+        
+        result = {
+            'regime': regime,
+            'adx': current_adx,
+            'plus_di': plus_di,
+            'minus_di': minus_di,
+            'trend_direction': trend_direction,
+            'suitable_strategies': suitable_strategies,
+            'confidence': confidence,
+            'volatility_ratio': volatility_ratio
+        }
+        
+        logger.debug(f"📊 Market Regime: {regime} (ADX: {current_adx:.1f}, Conf: {confidence:.2f})")
+        logger.debug(f"   Suitable: {', '.join(suitable_strategies) if suitable_strategies else 'None (avoid trading)'}")
+        
+        return result
     
     def calculate_score(self, conditions: Dict[str, bool]) -> float:
         """Calculate signal confidence score from conditions"""

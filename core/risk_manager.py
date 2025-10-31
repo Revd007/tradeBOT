@@ -284,7 +284,7 @@ class RiskManager:
         # Simplified correlation check
         # In production, use actual correlation matrix
         correlated_symbols = {
-            'BTCUSDm': ['XAGUSD'],
+            'XAUUSDm': ['XAGUSD'],
             'EURUSD': ['GBPUSD', 'AUDUSD'],
             'USDJPY': ['EURJPY', 'GBPJPY'],
         }
@@ -394,12 +394,12 @@ if __name__ == "__main__":
         risk_mgr = RiskManager(mt5)
         
         # Check if can trade
-        can_trade, reason = risk_mgr.can_trade("BTCUSDm")
+        can_trade, reason = risk_mgr.can_trade("XAUUSDm")
         print(f"Can trade: {can_trade} ({reason})")
         
         # Calculate position size
         lot_size = risk_mgr.calculate_position_size(
-            symbol="BTCUSDm",
+            symbol="XAUUSDm",
             stop_loss_pips=30,
             confidence=0.75,
             news_impact=3

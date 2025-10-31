@@ -23,10 +23,11 @@ class OrderExecutor:
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
         comment: str = "Auto-Trade",
-        deviation: int = 20
+        deviation: int = None,
+        max_retries: int = None  # 🔥 CHANGED: None = auto-adjust based on symbol
     ) -> Tuple[bool, Optional[Dict]]:
         """
-        Place market order with validation
+        🔥 IMPROVED: Place market order with requote retry and dynamic deviation
         
         Returns:
             (success: bool, order_result: Dict)
@@ -37,86 +38,180 @@ class OrderExecutor:
             if not symbol_info:
                 return False, {"error": f"Symbol {symbol} not available"}
             
+            # 🔥 DYNAMIC DEVIATION: MUCH Larger for volatile instruments like XAUUSD
+            if deviation is None:
+                if 'XAU' in symbol.upper():
+                    deviation = 200  # 🔥 INCREASED: 200 points for gold (20 pips!)
+                else:
+                    deviation = 100   # 🔥 INCREASED: 100 points for forex pairs (10 pips)
+            
+            # 🔥 DYNAMIC MAX RETRIES: More retries for volatile instruments
+            if max_retries is None:
+                if 'XAU' in symbol.upper():
+                    max_retries = 5  # 🔥 Gold gets 5 attempts
+                else:
+                    max_retries = 3  # Forex pairs get 3 attempts
+            
+            logger.debug(f"Using deviation: {deviation} points, max_retries: {max_retries} for {symbol}")
+            
             # Validate lot size
             lot_size = self._validate_lot_size(symbol_info, lot_size)
             
-            # Get current price
-            tick = self.mt5.get_tick(symbol)
-            if not tick:
-                return False, {"error": "Failed to get current price"}
+            # 🔥 RETRY LOOP for requotes (with exponential backoff)
+            last_error = None
             
-            # Determine order type and price
-            if order_type.upper() == 'BUY':
-                mt5_order_type = mt5.ORDER_TYPE_BUY
-                price = tick['ask']
-                sl_price = stop_loss if stop_loss else 0
-                tp_price = take_profit if take_profit else 0
-            elif order_type.upper() == 'SELL':
-                mt5_order_type = mt5.ORDER_TYPE_SELL
-                price = tick['bid']
-                sl_price = stop_loss if stop_loss else 0
-                tp_price = take_profit if take_profit else 0
-            else:
-                return False, {"error": f"Invalid order type: {order_type}"}
+            for attempt in range(max_retries):
+                try:
+                    # 🔥 EXPONENTIAL DELAY between retries (give broker time to stabilize)
+                    if attempt > 0:
+                        delay = 0.3 * (1.5 ** (attempt - 1))  # 0.3s, 0.45s, 0.68s
+                        logger.debug(f"   Waiting {delay:.2f}s before retry...")
+                        time.sleep(delay)
+                    
+                    # Get FRESH price for each attempt
+                    tick = self.mt5.get_tick(symbol)
+                    if not tick:
+                        last_error = "Failed to get current price"
+                        continue
+                    
+                    # Determine order type and price
+                    if order_type.upper() == 'BUY':
+                        mt5_order_type = mt5.ORDER_TYPE_BUY
+                        price = tick['ask']
+                        sl_price = stop_loss if stop_loss else 0
+                        tp_price = take_profit if take_profit else 0
+                    elif order_type.upper() == 'SELL':
+                        mt5_order_type = mt5.ORDER_TYPE_SELL
+                        price = tick['bid']
+                        sl_price = stop_loss if stop_loss else 0
+                        tp_price = take_profit if take_profit else 0
+                    else:
+                        return False, {"error": f"Invalid order type: {order_type}"}
+                    
+                    # Validate SL/TP
+                    sl_price, tp_price = self._validate_sl_tp(
+                        symbol_info, mt5_order_type, price, sl_price, tp_price
+                    )
+                    
+                    # Check spread (only on first attempt)
+                    if attempt == 0:
+                        spread_pips = symbol_info['spread_pips']
+                        if spread_pips > 10.0:  # 🔥 RAISED: 5 → 10 for XAUUSD
+                            logger.warning(f"High spread detected: {spread_pips:.1f} pips")
+                            return False, {"error": f"Spread too high: {spread_pips:.1f} pips"}
+                    
+                    # Check free margin (only on first attempt)
+                    if attempt == 0:
+                        if not self._check_margin(symbol, lot_size):
+                            return False, {"error": "Insufficient margin"}
+                    
+                    # 🔥 PROGRESSIVE DEVIATION: Increase tolerance on each retry
+                    # Base deviation + (50 points * attempt)
+                    # Example for XAUUSD: 200, 250, 300, 350, 400 points
+                    current_deviation = deviation + (50 * attempt)
+                    
+                    if attempt > 0:
+                        logger.info(f"   🔄 Retry #{attempt}: Increasing deviation to {current_deviation} points ({current_deviation/10} pips)")
+                    
+                    # 🔥 ADAPTIVE FILLING TYPE: Try different types on retry
+                    # First 2 attempts: IOC (Immediate or Cancel)
+                    # Next 2 attempts: FOK (Fill or Kill) 
+                    # Last attempt: Return (if supported)
+                    if attempt < 2:
+                        filling_type = mt5.ORDER_FILLING_IOC
+                        filling_name = "IOC"
+                    elif attempt < 4:
+                        filling_type = mt5.ORDER_FILLING_FOK
+                        filling_name = "FOK"
+                    else:
+                        # Try RETURN as last resort
+                        filling_type = mt5.ORDER_FILLING_RETURN
+                        filling_name = "RETURN"
+                    
+                    if attempt > 0:
+                        logger.debug(f"   Using filling type: {filling_name}")
+                    
+                    # Prepare request
+                    request = {
+                        "action": mt5.TRADE_ACTION_DEAL,
+                        "symbol": symbol,
+                        "volume": lot_size,
+                        "type": mt5_order_type,
+                        "price": price,
+                        "sl": sl_price,
+                        "tp": tp_price,
+                        "deviation": current_deviation,  # 🔥 PROGRESSIVE!
+                        "magic": self.magic_number,
+                        "comment": comment,
+                        "type_time": mt5.ORDER_TIME_GTC,
+                        "type_filling": filling_type,  # 🔥 DYNAMIC!
+                    }
+                    
+                    # Send order
+                    if attempt == 0:
+                        logger.info(f"Sending {order_type} order: {symbol} {lot_size} lots @ {price}")
+                    else:
+                        logger.info(f"   Retry #{attempt}: {order_type} @ {price} (fresh price)")
+                    
+                    result = mt5.order_send(request)
+                    
+                    if result is None:
+                        error = mt5.last_error()
+                        last_error = str(error)
+                        logger.warning(f"   Attempt {attempt+1}/{max_retries} failed: {error}")
+                        time.sleep(0.2)  # Short delay before retry
+                        continue
+                    
+                    result_dict = result._asdict()
+                    
+                    # 🔥 CHECK RETCODE: Retry for requote (10019)
+                    if result.retcode == 10019:  # TRADE_ERROR_REQUOTE
+                        logger.warning(f"   Requote on attempt {attempt+1}/{max_retries}, retrying with fresh price...")
+                        last_error = f"Requote (retcode: {result.retcode})"
+                        time.sleep(0.1)  # Very short delay
+                        continue
+                    
+                    # Check result
+                    if result.retcode != mt5.TRADE_RETCODE_DONE:
+                        last_error = f"{result.comment} (retcode: {result.retcode})"
+                        logger.error(f"   Order failed: {last_error}")
+                        
+                        # Don't retry for certain errors
+                        if result.retcode in [10004, 10006, 10013, 10014, 10015, 10016]:
+                            # Invalid parameters, not enough money, etc. - don't retry
+                            return False, result_dict
+                        
+                        # Retry for other errors
+                        time.sleep(0.2)
+                        continue
+                    
+                    # 🔥 SUCCESS! Check slippage
+                    slippage_pips = abs(result.price - price) / symbol_info['pip_value']
+                    
+                    # 🔥 LENIENT SLIPPAGE CHECK: 20 pips for XAUUSD, 5 pips for pairs
+                    max_acceptable_slippage = 20.0 if 'XAU' in symbol.upper() else 5.0
+                    
+                    if slippage_pips > max_acceptable_slippage:
+                        logger.warning(f"High slippage: {slippage_pips:.1f} pips (max: {max_acceptable_slippage})")
+                        # Try to close immediately if slippage too high
+                        self.close_position_by_ticket(result.order)
+                        return False, {"error": f"Slippage too high: {slippage_pips:.1f} pips"}
+                    
+                    logger.info(f"✅ Order executed: Ticket #{result.order}, Price: {result.price}, Slippage: {slippage_pips:.1f} pips")
+                    
+                    if attempt > 0:
+                        logger.info(f"   ✅ Success after {attempt+1} attempts!")
+                    
+                    return True, result_dict
+                
+                except Exception as e:
+                    last_error = str(e)
+                    logger.warning(f"   Attempt {attempt+1}/{max_retries} exception: {e}")
+                    time.sleep(0.2)
             
-            # Validate SL/TP
-            sl_price, tp_price = self._validate_sl_tp(
-                symbol_info, mt5_order_type, price, sl_price, tp_price
-            )
-            
-            # Check spread
-            spread_pips = symbol_info['spread_pips']
-            if spread_pips > 5.0:  # Abnormal spread
-                logger.warning(f"High spread detected: {spread_pips:.1f} pips")
-                return False, {"error": f"Spread too high: {spread_pips:.1f} pips"}
-            
-            # Check free margin
-            if not self._check_margin(symbol, lot_size):
-                return False, {"error": "Insufficient margin"}
-            
-            # Prepare request
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": symbol,
-                "volume": lot_size,
-                "type": mt5_order_type,
-                "price": price,
-                "sl": sl_price,
-                "tp": tp_price,
-                "deviation": deviation,
-                "magic": self.magic_number,
-                "comment": comment,
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
-            }
-            
-            # Send order
-            logger.info(f"Sending {order_type} order: {symbol} {lot_size} lots @ {price}")
-            result = mt5.order_send(request)
-            
-            if result is None:
-                error = mt5.last_error()
-                logger.error(f"Order send failed: {error}")
-                return False, {"error": str(error)}
-            
-            result_dict = result._asdict()
-            
-            # Check result
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                logger.error(f"Order failed: {result.comment} (retcode: {result.retcode})")
-                return False, result_dict
-            
-            # Check slippage
-            slippage_pips = abs(result.price - price) / symbol_info['pip_value']
-            if slippage_pips > self.max_slippage_pips:
-                logger.warning(f"High slippage: {slippage_pips:.1f} pips")
-                # Try to close immediately if slippage too high
-                self.close_position_by_ticket(result.order)
-                return False, {"error": f"Slippage too high: {slippage_pips:.1f} pips"}
-            
-            logger.info(f"✅ Order executed: Ticket #{result.order}, Price: {result.price}, Slippage: {slippage_pips:.1f} pips")
-            
-            return True, result_dict
+            # All retries failed
+            logger.error(f"❌ Order failed after {max_retries} attempts. Last error: {last_error}")
+            return False, {"error": f"Failed after {max_retries} attempts: {last_error}"}
             
         except Exception as e:
             logger.error(f"Exception in place_market_order: {str(e)}")
@@ -480,7 +575,7 @@ if __name__ == "__main__":
         
         # Place buy order
         success, result = executor.place_market_order(
-            symbol="BTCUSDm",
+            symbol="XAUUSDm",
             order_type="BUY",
             lot_size=0.01,
             stop_loss=3800.00,

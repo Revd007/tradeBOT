@@ -142,16 +142,28 @@ class FibonacciATRStrategy(BaseStrategy):
         atr: float
     ) -> Optional[Tuple[str, float]]:
         """
-        Check if price is at a Fibonacci level
+        🔥 IMPROVED: Check if price is in a Fibonacci ZONE (not just a line)
+        
+        Fibonacci levels are not precise lines but ZONES where reversals can occur.
+        We define a zone as: level ± (ATR * 0.25)
         
         Returns:
             (level_name, level_price) or None
         """
-        tolerance = atr * 0.5  # Within 0.5 ATR of Fibonacci level
+        # 🔥 NEW: Zona reversal (bukan garis tunggal)
+        # Level Fibonacci adalah ZONA, bukan garis tipis
+        zone_size = atr * 0.25  # Zona: ±0.25 ATR dari level
+        
+        logger.debug(f"   Checking Fib zones (zone size: {zone_size:.5f})")
         
         for level_name, level_price in fib_levels.items():
             if level_name in ['0.382', '0.500', '0.618', '0.786']:
-                if abs(price - level_price) < tolerance:
+                # 🔥 Check if price is INSIDE the zone
+                zone_upper = level_price + zone_size
+                zone_lower = level_price - zone_size
+                
+                if zone_lower <= price <= zone_upper:
+                    logger.debug(f"   ✅ Price {price:.5f} in {level_name} zone [{zone_lower:.5f} - {zone_upper:.5f}]")
                     return (level_name, level_price)
         
         return None
@@ -163,28 +175,66 @@ class FibonacciATRStrategy(BaseStrategy):
         direction: str
     ) -> bool:
         """
-        Detect if price is bouncing from Fibonacci level
+        🔥 IMPROVED: Detect if price is bouncing from Fibonacci ZONE
+        
+        Price doesn't need to touch exact level - being in the zone is enough.
+        Look for reversal signs: candlestick patterns, momentum shift.
         
         Args:
             df: Price data
-            fib_level: Fibonacci level price
+            fib_level: Fibonacci level price (center of zone)
             direction: 'BUY' or 'SELL'
         """
         recent = df.iloc[-5:]  # Last 5 candles
+        atr_avg = recent['atr'].mean()
+        
+        # 🔥 Define zone around level
+        zone_size = atr_avg * 0.25
+        zone_upper = fib_level + zone_size
+        zone_lower = fib_level - zone_size
         
         if direction == 'BUY':
-            # Check if recent low touched level and price is moving up
-            touched_level = any(abs(candle['low'] - fib_level) < recent['atr'].mean() * 0.3 
-                               for _, candle in recent.iterrows())
+            # Check if recent low entered zone and price is showing bullish signs
+            # Look for: wick into zone, bullish candle, momentum shift
+            
+            # 1. Did any candle enter the zone?
+            entered_zone = any(
+                zone_lower <= candle['low'] <= zone_upper
+                for _, candle in recent.iterrows()
+            )
+            
+            # 2. Is price moving up?
             moving_up = recent['close'].iloc[-1] > recent['close'].iloc[-3]
-            return touched_level and moving_up
+            
+            # 3. 🔥 NEW: Check for reversal candle (bullish)
+            current = recent.iloc[-1]
+            has_bullish_candle = (current['close'] > current['open'] and 
+                                 (current['close'] - current['open']) > atr_avg * 0.3)
+            
+            logger.debug(f"   Bounce check (BUY): Zone entered={entered_zone}, Moving up={moving_up}, Bullish={has_bullish_candle}")
+            
+            return entered_zone and (moving_up or has_bullish_candle)
         
         else:  # SELL
-            # Check if recent high touched level and price is moving down
-            touched_level = any(abs(candle['high'] - fib_level) < recent['atr'].mean() * 0.3 
-                               for _, candle in recent.iterrows())
+            # Check if recent high entered zone and price is showing bearish signs
+            
+            # 1. Did any candle enter the zone?
+            entered_zone = any(
+                zone_lower <= candle['high'] <= zone_upper
+                for _, candle in recent.iterrows()
+            )
+            
+            # 2. Is price moving down?
             moving_down = recent['close'].iloc[-1] < recent['close'].iloc[-3]
-            return touched_level and moving_down
+            
+            # 3. 🔥 NEW: Check for reversal candle (bearish)
+            current = recent.iloc[-1]
+            has_bearish_candle = (current['close'] < current['open'] and 
+                                 (current['open'] - current['close']) > atr_avg * 0.3)
+            
+            logger.debug(f"   Bounce check (SELL): Zone entered={entered_zone}, Moving down={moving_down}, Bearish={has_bearish_candle}")
+            
+            return entered_zone and (moving_down or has_bearish_candle)
     
     def _create_fib_signal(
         self,
@@ -285,10 +335,10 @@ if __name__ == "__main__":
     if mt5.initialize():
         strategy = FibonacciATRStrategy()
         
-        df = mt5.get_candles("BTCUSDm", "H1", count=200)
+        df = mt5.get_candles("XAUUSDm", "H1", count=200)
         df = strategy.add_all_indicators(df)
         
-        signal = strategy.analyze(df, mt5.get_symbol_info("BTCUSDm"))
+        signal = strategy.analyze(df, mt5.get_symbol_info("XAUUSDm"))
         
         if signal:
             print(f"\n{'='*70}")

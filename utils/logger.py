@@ -61,6 +61,12 @@ def setup_logging(log_dir: str = "./logs", level: str = "INFO"):
     # Suppress noisy libraries
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('requests').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)  # 🔥 NEW: Suppress Telegram API HTTP logs
+    logging.getLogger('httpcore').setLevel(logging.WARNING)  # 🔥 NEW: Suppress underlying HTTP logs
+    logging.getLogger('telegram').setLevel(logging.WARNING)  # 🔥 NEW: Suppress Telegram bot library logs
+    logging.getLogger('telegram.ext').setLevel(logging.ERROR)  # 🔥 NEW: Suppress Telegram ext errors (only show CRITICAL)
+    logging.getLogger('telegram.bot').setLevel(logging.ERROR)  # 🔥 NEW: Suppress Telegram bot errors
+    logging.getLogger('telegram._bot').setLevel(logging.ERROR)  # 🔥 NEW: Suppress internal Telegram errors
     
     logger.info("=" * 80)
     logger.info("Logging initialized")

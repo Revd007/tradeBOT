@@ -41,7 +41,10 @@ class TelegramNotifier:
         self.chat_id = chat_id
         self.bot = None
         self.trading_bot = trading_bot_engine  # 🔥 NEW: Access to RL/RAG/Calendar
+        self.app = None  # 🔥 NEW: For command handlers
         self._initialize_bot()
+        if self.bot:
+            self._setup_commands()  # 🔥 NEW: Setup command handlers
     
     def _initialize_bot(self):
         """Initialize Telegram bot"""
@@ -51,6 +54,224 @@ class TelegramNotifier:
         except Exception as e:
             logger.error(f"❌ Failed to initialize Telegram bot: {str(e)}")
             self.bot = None
+    
+    def _setup_commands(self):
+        """🔥 NEW: Setup command handlers for real-time monitoring"""
+        try:
+            self.app = Application.builder().token(self.bot_token).build()
+            
+            # Register command handlers
+            self.app.add_handler(CommandHandler("start", self._cmd_start))
+            self.app.add_handler(CommandHandler("status", self._cmd_status))
+            self.app.add_handler(CommandHandler("menu", self._cmd_menu))
+            self.app.add_handler(CommandHandler("stats", self._cmd_stats))
+            self.app.add_handler(CommandHandler("positions", self._cmd_positions))
+            self.app.add_handler(CommandHandler("balance", self._cmd_balance))
+            
+            # Start polling in background (non-blocking)
+            import threading
+            polling_thread = threading.Thread(target=self._start_polling, daemon=True)
+            polling_thread.start()
+            logger.info("✅ Telegram bot commands initialized")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to setup commands: {str(e)}")
+            self.app = None
+    
+    def _start_polling(self):
+        """Start bot polling (runs in background thread)"""
+        try:
+            if self.app:
+                # Add error handler to suppress Telegram network errors
+                async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+                    """Handle errors silently"""
+                    error = context.error
+                    if isinstance(error, TelegramError):
+                        # Network errors are expected and don't need logging
+                        return
+                    # Only log unexpected errors
+                    logger.error(f"Telegram error: {error}")
+                
+                # Add error handler
+                self.app.add_error_handler(error_handler)
+                
+                # Start polling
+                self.app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        except Exception as e:
+            # Only log if it's not a network error
+            if "NetworkError" not in str(e) and "httpx.ReadError" not in str(e):
+                logger.error(f"❌ Polling error: {str(e)}")
+    
+    async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /start command"""
+        message = """
+🤖 <b>TRADING BOT - MONITORING CENTER</b>
+
+📊 <b>Available Commands:</b>
+/status - Real-time bot status
+/menu - Dashboard menu
+/stats - Trading statistics
+/positions - Open positions
+/balance - Account balance
+
+💡 <b>Monitoring Mode:</b>
+Bot automatically sends:
+• Trade alerts (entry/exit)
+• TP/SL notifications
+• Daily reports
+
+<i>Bot is live and monitoring!</i>
+"""
+        await update.message.reply_text(message, parse_mode='HTML')
+    
+    async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /status command - Real-time bot status"""
+        if not self.trading_bot:
+            await update.message.reply_text("❌ Trading bot not connected")
+            return
+        
+        try:
+            status = self.trading_bot.get_bot_status()
+            
+            message = f"""
+📊 <b>REAL-TIME BOT STATUS</b>
+
+🔌 <b>Connection:</b>
+• MT5: {'✅ Connected' if status['mt5']['connected'] else '❌ Disconnected'}
+• Account: {status['mt5'].get('account_login', 'N/A')}
+• Server: {status['mt5'].get('account_server', 'N/A')}
+
+💰 <b>Account:</b>
+• Balance: ${status['mt5'].get('balance', 0):.2f}
+• Equity: ${status['mt5'].get('equity', 0):.2f}
+• Free Margin: ${status['mt5'].get('margin_free', 0):.2f}
+
+📈 <b>Positions:</b>
+• Open: {status['positions']['open_count']}
+{'• Details: ' + str(status['positions']['details'][:3]) if status['positions']['open_count'] > 0 else ''}
+
+🤖 <b>AI Models:</b>
+• CLS: {'✅ Loaded' if status['models']['cls_loaded'] else '❌ Not loaded'}
+• RL Agent: {'✅ Active' if status['models']['rl_agent_enabled'] else '⏸️ Disabled'}
+
+🔄 <b>Auto-Trade:</b> {'✅ Enabled' if status['auto_trade_enabled'] else '⏸️ Disabled'}
+
+<i>Last update: {datetime.now().strftime('%H:%M:%S')}</i>
+"""
+            await update.message.reply_text(message, parse_mode='HTML')
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {str(e)[:100]}")
+    
+    async def _cmd_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /menu command - Dashboard menu"""
+        await self._cmd_status(update, context)  # Show status as menu
+    
+    async def _cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /stats command - Trading statistics"""
+        if not self.trading_bot:
+            await update.message.reply_text("❌ Trading bot not connected")
+            return
+        
+        try:
+            daily_stats = self.trading_bot.performance.get_daily_stats() if self.trading_bot.performance else {}
+            
+            total_trades = daily_stats.get('total_trades', 0)
+            wins = daily_stats.get('winning_trades', 0)
+            losses = daily_stats.get('losing_trades', 0)
+            win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+            total_profit = daily_stats.get('total_profit', 0)
+            
+            message = f"""
+📊 <b>TRADING STATISTICS</b>
+
+📈 <b>Today's Performance:</b>
+• Total Trades: {total_trades}
+• Wins: {wins} ✅
+• Losses: {losses} ❌
+• Win Rate: {win_rate:.1f}%
+
+💰 <b>P&L:</b>
+• Today's Profit: ${total_profit:+.2f}
+• Avg Win: ${daily_stats.get('avg_win', 0):.2f}
+• Avg Loss: ${daily_stats.get('avg_loss', 0):.2f}
+• Profit Factor: {daily_stats.get('profit_factor', 0):.2f}
+
+🎯 <b>Best Trade:</b> ${daily_stats.get('best_trade', 0):.2f}
+📉 <b>Worst Trade:</b> ${daily_stats.get('worst_trade', 0):.2f}
+
+<i>Updated: {datetime.now().strftime('%H:%M:%S')}</i>
+"""
+            await update.message.reply_text(message, parse_mode='HTML')
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {str(e)[:100]}")
+    
+    async def _cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /positions command - Open positions"""
+        if not self.trading_bot:
+            await update.message.reply_text("❌ Trading bot not connected")
+            return
+        
+        try:
+            positions = self.trading_bot.mt5.get_open_positions()
+            
+            if not positions:
+                await update.message.reply_text("📭 No open positions")
+                return
+            
+            message = "📊 <b>OPEN POSITIONS</b>\n\n"
+            for pos in positions:
+                pos_type = "🟢 LONG" if pos.get('type') == 0 else "🔴 SHORT"
+                profit = pos.get('profit', 0)
+                profit_emoji = "💰" if profit > 0 else "📉"
+                
+                message += f"""
+{pos_type} - <b>{pos.get('symbol', 'N/A')}</b>
+• Ticket: #{pos.get('ticket', 'N/A')}
+• Entry: {pos.get('price_open', 0):.5f}
+• Current: {pos.get('price_current', 0):.5f}
+• Volume: {pos.get('volume', 0):.2f} lots
+{profit_emoji} P&L: ${profit:.2f}
+━━━━━━━━━━━━━━━━━━━━
+"""
+            
+            await update.message.reply_text(message, parse_mode='HTML')
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {str(e)[:100]}")
+    
+    async def _cmd_balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /balance command - Account balance"""
+        if not self.trading_bot:
+            await update.message.reply_text("❌ Trading bot not connected")
+            return
+        
+        try:
+            account = self.trading_bot.mt5.get_account_info()
+            
+            balance = account.get('balance', 0)
+            equity = account.get('equity', 0)
+            margin = account.get('margin', 0)
+            margin_free = account.get('margin_free', 0)
+            margin_level = account.get('margin_level', 99999)
+            
+            message = f"""
+💰 <b>ACCOUNT BALANCE</b>
+
+💵 <b>Funds:</b>
+• Balance: ${balance:.2f}
+• Equity: ${equity:.2f}
+• Margin Used: ${margin:.2f}
+• Free Margin: ${margin_free:.2f}
+
+📊 <b>Margin Level:</b> {margin_level:.0f}%
+
+💡 <b>Status:</b>
+{'✅ Healthy' if margin_level > 300 else '⚠️ Warning' if margin_level > 200 else '🚨 Critical'}
+
+<i>Updated: {datetime.now().strftime('%H:%M:%S')}</i>
+"""
+            await update.message.reply_text(message, parse_mode='HTML')
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {str(e)[:100]}")
     
     def send_message(self, message: str, parse_mode: str = 'HTML') -> bool:
         """
@@ -138,7 +359,7 @@ class TelegramNotifier:
     
     def send_position_closed(self, position_data: Dict) -> bool:
         """
-        Send position closed alert
+        🔥 UPGRADED: Send position closed alert with TP/SL details
         
         Args:
             position_data: {
@@ -146,22 +367,75 @@ class TelegramNotifier:
                 'type': 'BUY' or 'SELL',
                 'profit': float,
                 'profit_pips': float,
-                'close_reason': str
+                'close_reason': str,
+                'entry_price': float,
+                'exit_price': float,
+                'sl_price': float,
+                'tp_price': float,
+                'ticket': int
             }
         """
         profit = position_data.get('profit', 0)
+        profit_pips = position_data.get('profit_pips', 0)
+        
+        # Determine if TP or SL hit
+        entry = position_data.get('entry_price', 0)
+        exit_price = position_data.get('exit_price', 0)
+        sl_price = position_data.get('sl_price', 0)
+        tp_price = position_data.get('tp_price', 0)
+        close_reason = position_data.get('close_reason', 'Manual')
+        
+        # Detect TP/SL hit
+        position_type = position_data.get('type', 'BUY')
+        if close_reason == 'SL Hit':
+            result_emoji = "🛑"
+            result_text = "STOP LOSS HIT"
+        elif close_reason == 'TP Hit' or (abs(exit_price - tp_price) < abs(exit_price - sl_price)):
+            result_emoji = "🎯"
+            result_text = "TAKE PROFIT HIT"
+        elif close_reason.startswith('pullback') or close_reason.startswith('trend'):
+            result_emoji = "🔄"
+            result_text = f"SL+ EXIT ({close_reason})"
+        else:
+            result_emoji = "💰" if profit > 0 else "📉"
+            result_text = close_reason
+        
         profit_emoji = "💰" if profit > 0 else "📉"
         
+        # Get current stats
+        stats_summary = ""
+        try:
+            if self.trading_bot and self.trading_bot.performance:
+                daily = self.trading_bot.performance.get_daily_stats()
+                total_trades = daily.get('total_trades', 0)
+                wins = daily.get('winning_trades', 0)
+                wr = (wins / total_trades * 100) if total_trades > 0 else 0
+                stats_summary = f"""
+📊 <b>Today's Stats:</b>
+• Total Trades: {total_trades}
+• Win Rate: {wr:.1f}%
+• Today's P&L: ${daily.get('total_profit', 0):+.2f}
+"""
+        except:
+            pass
+        
         message = f"""
-{profit_emoji} <b>POSITION CLOSED</b>
+{result_emoji} <b>{result_text}</b>
 
 <b>Symbol:</b> {position_data['symbol']}
-<b>Type:</b> {position_data['type']}
+<b>Type:</b> {position_type}
+<b>Ticket:</b> #{position_data.get('ticket', 'N/A')}
 
-<b>Profit:</b> ${profit:.2f}
-<b>Pips:</b> {position_data.get('profit_pips', 0):+.1f}
+<b>Entry:</b> {entry:.5f}
+<b>Exit:</b> {exit_price:.5f}
+{f"SL: {sl_price:.5f} (Hit!)" if close_reason == 'SL Hit' and sl_price > 0 else f"SL: {sl_price:.5f}" if sl_price > 0 else ""}
+{f"TP: {tp_price:.5f} (Hit!)" if close_reason == 'TP Hit' and tp_price > 0 else f"TP: {tp_price:.5f}" if tp_price > 0 else ""}
 
-<b>Close Reason:</b> {position_data.get('close_reason', 'Manual')}
+{profit_emoji} <b>Result:</b> ${profit:.2f} ({profit_pips:+.1f} pips)
+
+<b>Close Reason:</b> {close_reason}
+
+{stats_summary}
 
 <i>Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>
 """
@@ -254,7 +528,7 @@ class TelegramNotifier:
         message = f"""
 🤖 <b>TRADING BOT STARTED</b>
 
-<b>Symbol:</b> {config.get('symbol', 'BTCUSDm')}
+<b>Symbol:</b> {config.get('symbol', 'XAUUSDm')}
 <b>Timeframe:</b> {config.get('timeframe', 'M5')}
 <b>Account Type:</b> {config.get('account_type', 'DEMO')}
 
@@ -302,7 +576,7 @@ class TelegramNotifier:
         
         try:
             profit = trade_data.get('profit', 0)
-            symbol = trade_data.get('symbol', 'BTCUSDm')
+            symbol = trade_data.get('symbol', 'XAUUSDm')
             
             # Get RAG memory insights
             rag_insights = self._get_rag_insights(symbol, trade_data)
@@ -348,7 +622,7 @@ This setup had {rag_insights.split('win rate')[0] if 'win rate' in rag_insights 
         
         try:
             loss = abs(trade_data.get('profit', 0))
-            symbol = trade_data.get('symbol', 'BTCUSDm')
+            symbol = trade_data.get('symbol', 'XAUUSDm')
             
             # Get RAG memory insights
             rag_insights = self._get_rag_insights(symbol, trade_data)
@@ -386,7 +660,7 @@ Close Reason: {trade_data.get('close_reason', 'SL Hit')}
             logger.error(f"Error in loss analysis: {e}")
             return self.send_position_closed(trade_data)
     
-    def send_market_analysis(self, symbol: str = 'BTCUSDm') -> bool:
+    def send_market_analysis(self, symbol: str = 'XAUUSDm') -> bool:
         """
         🔥 NEW: On-demand market analysis with AI insights
         
@@ -436,7 +710,7 @@ Close Reason: {trade_data.get('close_reason', 'SL Hit')}
             logger.error(f"Error in market analysis: {e}")
             return self.send_message(f"❌ Analysis error: {str(e)[:100]}")
     
-    def send_manual_trade_suggestion(self, symbol: str = 'BTCUSDm', user_bias: str = None) -> bool:
+    def send_manual_trade_suggestion(self, symbol: str = 'XAUUSDm', user_bias: str = None) -> bool:
         """
         🔥 NEW: AI-powered manual trading assistant
         
@@ -664,6 +938,87 @@ Every new trade makes it smarter!
         except:
             return "• Calendar unavailable"
     
+    def send_realtime_dashboard(self) -> bool:
+        """
+        🔥 NEW: Send real-time dashboard with all key metrics
+        
+        Updates automatically during trading session
+        """
+        if not self.trading_bot:
+            return False
+        
+        try:
+            # Get account info
+            account = self.trading_bot.mt5.get_account_info()
+            balance = account.get('balance', 0)
+            equity = account.get('equity', 0)
+            
+            # Get positions
+            positions = self.trading_bot.mt5.get_open_positions()
+            
+            # Get daily stats
+            daily_stats = {}
+            if self.trading_bot.performance:
+                daily_stats = self.trading_bot.performance.get_daily_stats()
+            
+            total_trades = daily_stats.get('total_trades', 0)
+            wins = daily_stats.get('winning_trades', 0)
+            losses = daily_stats.get('losing_trades', 0)
+            win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+            total_profit = daily_stats.get('total_profit', 0)
+            
+            # Calculate unrealized P&L from open positions
+            unrealized_pnl = sum(pos.get('profit', 0) for pos in positions)
+            
+            # Bot status
+            auto_trade_status = "✅ ACTIVE" if self.trading_bot.auto_trade_enabled else "⏸️ PAUSED"
+            
+            message = f"""
+📊 <b>REAL-TIME DASHBOARD</b>
+
+💰 <b>ACCOUNT:</b>
+• Balance: ${balance:.2f}
+• Equity: ${equity:.2f}
+• Floating P&L: ${unrealized_pnl:+.2f}
+
+📈 <b>TRADING STATS:</b>
+• Total Trades: {total_trades}
+• Wins: {wins} ✅ | Losses: {losses} ❌
+• Win Rate: <b>{win_rate:.1f}%</b>
+• Today's Profit: ${total_profit:+.2f}
+
+📊 <b>OPEN POSITIONS:</b> {len(positions)}
+{self._format_positions_for_dashboard(positions)}
+
+🤖 <b>STATUS:</b> {auto_trade_status}
+
+<i>🔄 Auto-updating | {datetime.now().strftime('%H:%M:%S')}</i>
+"""
+            
+            return self.send_message(message)
+        
+        except Exception as e:
+            logger.error(f"Error sending dashboard: {e}")
+            return False
+    
+    def _format_positions_for_dashboard(self, positions: List[Dict]) -> str:
+        """Format positions for dashboard display"""
+        if not positions:
+            return "• No open positions"
+        
+        lines = []
+        for pos in positions[:5]:  # Max 5 positions
+            pos_type = "🟢 LONG" if pos.get('type') == 0 else "🔴 SHORT"
+            profit = pos.get('profit', 0)
+            profit_emoji = "💰" if profit > 0 else "📉"
+            
+            lines.append(f"• {pos_type} {pos.get('symbol', 'N/A')}: {profit_emoji} ${profit:.2f}")
+        
+        if len(positions) > 5:
+            lines.append(f"... and {len(positions) - 5} more")
+        
+        return "\n".join(lines) if lines else "• No positions"
+    
     def _get_trading_recommendation(self, analysis: Dict) -> str:
         """Get final AI recommendation"""
         should_enter = analysis.get('should_enter_trade', False)
@@ -736,10 +1091,10 @@ if __name__ == "__main__":
     load_dotenv()
     
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-    chat_id = os.getenv('TELEGRAM_CHAT_ID')
+    chat_id = os.getenv('TELEGRAM_GROUP_ID')
     
     if not bot_token or not chat_id:
-        print("❌ Please set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env")
+        print("❌ Please set TELEGRAM_BOT_TOKEN and TELEGRAM_GROUP_ID in .env")
         exit(1)
     
     notifier = TelegramNotifier(bot_token, chat_id)
@@ -756,7 +1111,7 @@ if __name__ == "__main__":
     # Test trade alert
     print("\n📤 Sending test trade alert...")
     trade_data = {
-        'symbol': 'BTCUSDm',
+        'symbol': 'XAUUSDm',
         'type': 'BUY',
         'entry': 3850.50,
         'sl': 3840.00,

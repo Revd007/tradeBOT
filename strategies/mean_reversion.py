@@ -24,14 +24,18 @@ class MeanReversionStrategy(BaseStrategy):
     
     def analyze(self, df: pd.DataFrame, symbol_info: Dict) -> Optional[Dict]:
         """
-        Look for reversal signals after overextended conditions.
+        🔥 IMPROVED: Look for reversal signals after overextended conditions.
+        
+        PRIMARY FILTER: Price must be overextended from EMA (measured in ATR)
         
         SELL conditions (after overextended bullish):
+        - Price > EMA21 by at least 2.0x ATR (quantitative overextension!)
         - RSI exits overbought zone (70+ → below 70)
         - MACD histogram turning down
         - Bearish confirmation candle
         
         BUY conditions (after overextended bearish):
+        - Price < EMA21 by at least 2.0x ATR (quantitative overextension!)
         - RSI exits oversold zone (below 30 → above 30)
         - MACD histogram turning up
         - Bullish confirmation candle
@@ -43,7 +47,7 @@ class MeanReversionStrategy(BaseStrategy):
         previous = df.iloc[-2]
         
         # Check if required indicators exist
-        required_cols = ['rsi', 'macd_hist', 'atr', 'ema_21', 'open', 'close', 'high', 'low', 'tick_volume']
+        required_cols = ['rsi', 'macd_hist', 'atr', 'ema_21', 'ema_50', 'open', 'close', 'high', 'low', 'tick_volume']
         if not all(col in df.columns for col in required_cols):
             logger.warning("⚠️  Missing required indicators for mean reversion analysis")
             return None
@@ -51,8 +55,43 @@ class MeanReversionStrategy(BaseStrategy):
         # Get 3 recent candles for analysis
         recent_3_candles = df.iloc[-3:]
         
+        # 🔥 STEP 1: Measure OVEREXTENSION using ATR (PRIMARY FILTER!)
+        # This is the KEY improvement - quantitative measure of "how far is too far"
+        distance_from_ema21 = current['close'] - current['ema_21']
+        distance_from_ema50 = current['close'] - current['ema_50']
+        atr = current['atr']
+        
+        # Express distance in ATR units
+        overextension_ema21 = distance_from_ema21 / atr if atr > 0 else 0
+        overextension_ema50 = distance_from_ema50 / atr if atr > 0 else 0
+        
+        logger.debug(f"   📊 Overextension Analysis:")
+        logger.debug(f"      Close: {current['close']:.5f}")
+        logger.debug(f"      EMA21: {current['ema_21']:.5f} (distance: {overextension_ema21:.2f} ATR)")
+        logger.debug(f"      EMA50: {current['ema_50']:.5f} (distance: {overextension_ema50:.2f} ATR)")
+        logger.debug(f"      ATR: {atr:.5f}")
+        
+        # 🔥 THRESHOLD: Price must be at least 1.5-2.5 ATR away from mean
+        # Adjustable based on instrument volatility
+        min_overextension = 1.5  # Minimum 1.5 ATR for signal
+        optimal_overextension = 2.0  # Optimal 2.0 ATR for high confidence
+        
+        # Check if price is overextended (bullish side)
+        is_overextended_bullish = overextension_ema21 >= min_overextension
+        
+        # Check if price is overextended (bearish side)
+        is_overextended_bearish = overextension_ema21 <= -min_overextension
+        
+        if not is_overextended_bullish and not is_overextended_bearish:
+            logger.debug(f"   🚫 No overextension detected (EMA21 distance: {overextension_ema21:.2f} ATR, need: ±{min_overextension} ATR)")
+            return None
+        
+        logger.debug(f"   ✅ Overextension detected: {overextension_ema21:+.2f} ATR from EMA21")
+        
         # --- SELL Conditions (after overextended bullish) ---
         bearish_conditions = {
+            # 🔥 PRIMARY: Price is overextended above EMA
+            'overextended_bullish': is_overextended_bullish,
             # 🔥 LOGIKA BARU: Apakah RSI baru saja keluar dari overbought?
             'rsi_exit_overbought': (recent_3_candles['rsi'].max() > 70) and (current['rsi'] < previous['rsi']),
             'macd_turning_down': current['macd_hist'] < previous['macd_hist'],
@@ -63,6 +102,8 @@ class MeanReversionStrategy(BaseStrategy):
         
         # --- BUY Conditions (after overextended bearish) ---
         bullish_conditions = {
+            # 🔥 PRIMARY: Price is overextended below EMA
+            'overextended_bearish': is_overextended_bearish,
             # 🔥 LOGIKA BARU: Apakah RSI baru saja keluar dari oversold?
             'rsi_exit_oversold': (recent_3_candles['rsi'].min() < 30) and (current['rsi'] > previous['rsi']),
             'macd_turning_up': current['macd_hist'] > previous['macd_hist'],
@@ -131,24 +172,38 @@ class MeanReversionStrategy(BaseStrategy):
     
     def _calculate_score_weighted(self, conditions: Dict[str, bool]) -> float:
         """
-        🔥 NEW: Sistem skor berbobot untuk sinyal mean reversion.
-        Memberikan bobot berbeda pada setiap kondisi berdasarkan pentingnya.
+        🔥 IMPROVED: Weighted scoring system for mean reversion signals.
+        
+        Priority order:
+        1. Overextension (PRIMARY - must have!)
+        2. RSI exit from extreme zone
+        3. MACD momentum shift
+        4. Candle confirmation
+        5. Volume spike
         """
         score = 0.0
         
-        # Beri bobot lebih pada pemicu utama (momentum)
+        # 🔥 PRIORITY #1: Overextension (30% weight) - MUST HAVE!
+        if conditions.get('overextended_bullish') or conditions.get('overextended_bearish'):
+            score += 0.30  # Base score for overextension
+        else:
+            # No overextension = No trade!
+            return 0.0
+        
+        # 🔥 PRIORITY #2: RSI exit from extreme (30% weight)
         if conditions.get('rsi_exit_overbought') or conditions.get('rsi_exit_oversold'):
-            score += 0.40  # Pemicu utama - RSI keluar dari zona jenuh
+            score += 0.30  # Primary trigger - RSI exiting extreme zone
         
+        # 🔥 PRIORITY #3: MACD momentum shift (20% weight)
         if conditions.get('macd_turning_down') or conditions.get('macd_turning_up'):
-            score += 0.25  # Konfirmasi momentum sekunder - MACD berbalik
+            score += 0.20  # Secondary confirmation - MACD reversing
         
-        # Bobot lebih rendah untuk konfirmasi candle & volume
+        # Lower weight for candle & volume confirmation
         if conditions.get('bearish_candle') or conditions.get('bullish_candle'):
-            score += 0.20  # Konfirmasi harga - Candle pembalikan
+            score += 0.15  # Price confirmation - Reversal candle
         
         if conditions.get('volume_spike'):
-            score += 0.15  # Konfirmasi partisipasi pasar - Volume spike
+            score += 0.10  # Market participation - Volume spike
         
         return min(score, 1.0)  # Cap at 1.0
     
@@ -208,9 +263,9 @@ if __name__ == "__main__":
         strategy = MeanReversionStrategy()
         
         # Get test data
-        df = mt5.get_candles("BTCUSDm", "M5", count=200)
+        df = mt5.get_candles("XAUUSDm", "M5", count=200)
         df = strategy.add_all_indicators(df)
-        symbol_info = mt5.get_symbol_info("BTCUSDm")
+        symbol_info = mt5.get_symbol_info("XAUUSDm")
         
         # Test analysis
         signal = strategy.analyze(df, symbol_info)

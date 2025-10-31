@@ -16,11 +16,11 @@ class CounterTrendStrategy(BaseStrategy):
     
     def analyze(self, df: pd.DataFrame, symbol_info: Dict) -> Optional[Dict]:
         """
-        Look for reversal signals at extremes
+        🔥 IMPROVED: Look for reversal signals at extremes with:
+        - DIVERGENCE as PRIMARY REQUIREMENT (most reliable!)
+        - Reversal candle pattern confirmation
         - Oversold/Overbought RSI
         - Price at Bollinger Bands extremes
-        - Divergence
-        - Reversal candle patterns
         """
         if len(df) < 50:
             return None
@@ -34,12 +34,32 @@ class CounterTrendStrategy(BaseStrategy):
         bb_lower = current['bb_lower']
         close = current['close']
         
+        # 🔥 STEP 1: Detect divergence FIRST (primary filter!)
+        divergence = self._detect_divergence(df)
+        
+        if divergence is None:
+            # 🔥 NEW POLICY: No divergence = No counter-trend trade!
+            # This is the most important filter to avoid "catching falling knives"
+            logger.debug(f"   🚫 Counter-trend: No divergence detected → Skipping")
+            return None
+        
+        logger.debug(f"   ✅ Divergence detected: {divergence}")
+        
+        # 🔥 STEP 2: Confirm with reversal candle patterns
+        has_bullish_pattern = (self.patterns.is_hammer(current) or 
+                               self.patterns.is_engulfing(df, len(df)-1, bullish=True) or
+                               self.patterns.is_doji(current))
+        
+        has_bearish_pattern = (self.patterns.is_shooting_star(current) or 
+                               self.patterns.is_engulfing(df, len(df)-1, bullish=False) or
+                               self.patterns.is_doji(current))
+        
         # Bearish reversal conditions (SELL)
         bearish_conditions = {
+            'divergence_detected': divergence == 'BEARISH',  # 🔥 MUST HAVE!
+            'reversal_pattern': has_bearish_pattern,  # 🔥 HIGH WEIGHT
             'rsi_overbought': rsi > 70,
             'price_at_bb_upper': close >= bb_upper * 0.998,
-            'shooting_star': self.patterns.is_shooting_star(current),
-            'bearish_engulfing': self.patterns.is_engulfing(df, len(df)-1, bullish=False),
             'macd_bearish_cross': (previous['macd'] > previous['macd_signal'] and
                                    current['macd'] < current['macd_signal']),
             'stoch_overbought': current['stoch_k'] > 80
@@ -47,37 +67,69 @@ class CounterTrendStrategy(BaseStrategy):
         
         # Bullish reversal conditions (BUY)
         bullish_conditions = {
+            'divergence_detected': divergence == 'BULLISH',  # 🔥 MUST HAVE!
+            'reversal_pattern': has_bullish_pattern,  # 🔥 HIGH WEIGHT
             'rsi_oversold': rsi < 30,
             'price_at_bb_lower': close <= bb_lower * 1.002,
-            'hammer': self.patterns.is_hammer(current),
-            'bullish_engulfing': self.patterns.is_engulfing(df, len(df)-1, bullish=True),
             'macd_bullish_cross': (previous['macd'] < previous['macd_signal'] and
                                    current['macd'] > current['macd_signal']),
             'stoch_oversold': current['stoch_k'] < 20
         }
         
-        bearish_score = self.calculate_score(bearish_conditions)
-        bullish_score = self.calculate_score(bullish_conditions)
+        # 🔥 IMPROVED: Weighted scoring (divergence + pattern = 80% of score!)
+        if divergence == 'BEARISH':
+            # Start with high base score if divergence exists
+            bearish_score = 0.50  # 50% base score from divergence
+            
+            # Add pattern confirmation (crucial!)
+            if has_bearish_pattern:
+                bearish_score += 0.25  # +25% if pattern confirms
+                logger.debug(f"   📈 Bearish pattern confirmed: +0.25")
+            
+            # Add supporting conditions (20% remaining)
+            supporting_score = sum([
+                0.05 if bearish_conditions['rsi_overbought'] else 0,
+                0.05 if bearish_conditions['price_at_bb_upper'] else 0,
+                0.05 if bearish_conditions['macd_bearish_cross'] else 0,
+                0.05 if bearish_conditions['stoch_overbought'] else 0
+            ])
+            bearish_score += supporting_score
+            
+            logger.debug(f"   Bearish score: {bearish_score:.2f} (Div: 0.50, Pattern: {0.25 if has_bearish_pattern else 0}, Support: {supporting_score:.2f})")
+            
+            # 🔥 REQUIRE: Divergence + at least RSI/BB extreme
+            if bearish_score >= self.min_confidence and (bearish_conditions['rsi_overbought'] or bearish_conditions['price_at_bb_upper']):
+                return self._create_signal(
+                    'SELL', df, symbol_info, bearish_score, 
+                    bearish_conditions, 'Counter-trend SELL (Divergence + Reversal)'
+                )
         
-        # Detect divergence
-        divergence = self._detect_divergence(df)
-        if divergence == 'BULLISH':
-            bullish_score += 0.15
-        elif divergence == 'BEARISH':
-            bearish_score += 0.15
-        
-        # Generate signal
-        if bearish_score >= self.min_confidence:
-            return self._create_signal(
-                'SELL', df, symbol_info, bearish_score, 
-                bearish_conditions, 'Counter-trend SELL'
-            )
-        
-        elif bullish_score >= self.min_confidence:
-            return self._create_signal(
-                'BUY', df, symbol_info, bullish_score,
-                bullish_conditions, 'Counter-trend BUY'
-            )
+        elif divergence == 'BULLISH':
+            # Start with high base score if divergence exists
+            bullish_score = 0.50  # 50% base score from divergence
+            
+            # Add pattern confirmation (crucial!)
+            if has_bullish_pattern:
+                bullish_score += 0.25  # +25% if pattern confirms
+                logger.debug(f"   📉 Bullish pattern confirmed: +0.25")
+            
+            # Add supporting conditions (20% remaining)
+            supporting_score = sum([
+                0.05 if bullish_conditions['rsi_oversold'] else 0,
+                0.05 if bullish_conditions['price_at_bb_lower'] else 0,
+                0.05 if bullish_conditions['macd_bullish_cross'] else 0,
+                0.05 if bullish_conditions['stoch_oversold'] else 0
+            ])
+            bullish_score += supporting_score
+            
+            logger.debug(f"   Bullish score: {bullish_score:.2f} (Div: 0.50, Pattern: {0.25 if has_bullish_pattern else 0}, Support: {supporting_score:.2f})")
+            
+            # 🔥 REQUIRE: Divergence + at least RSI/BB extreme
+            if bullish_score >= self.min_confidence and (bullish_conditions['rsi_oversold'] or bullish_conditions['price_at_bb_lower']):
+                return self._create_signal(
+                    'BUY', df, symbol_info, bullish_score,
+                    bullish_conditions, 'Counter-trend BUY (Divergence + Reversal)'
+                )
         
         return None
     
@@ -544,10 +596,10 @@ if __name__ == "__main__":
         # Test individual strategy
         strategy = CounterTrendStrategy()
         
-        df = mt5.get_candles("BTCUSDm", "M5", count=200)
+        df = mt5.get_candles("XAUUSDm", "M5", count=200)
         df = strategy.add_all_indicators(df)
         
-        signal = strategy.analyze(df, mt5.get_symbol_info("BTCUSDm"))
+        signal = strategy.analyze(df, mt5.get_symbol_info("XAUUSDm"))
         
         if signal:
             print(f"\nSignal detected:")
@@ -562,7 +614,7 @@ if __name__ == "__main__":
         
         # Test strategy manager
         manager = StrategyManager(mt5)
-        result = manager.analyze_all("BTCUSDm", "M5")
+        result = manager.analyze_all("XAUUSDm", "M5")
         
         print(f"\n--- Strategy Manager Results ---")
         print(f"Consensus: {result['consensus']}")
