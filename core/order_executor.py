@@ -38,16 +38,16 @@ class OrderExecutor:
             if not symbol_info:
                 return False, {"error": f"Symbol {symbol} not available"}
             
-            # 🔥 DYNAMIC DEVIATION: MUCH Larger for volatile instruments like XAUUSD
+            # 🔥 DYNAMIC DEVIATION: MUCH Larger for volatile instruments like BTCUSD
             if deviation is None:
-                if 'XAU' in symbol.upper():
+                if 'BTC' in symbol.upper():
                     deviation = 200  # 🔥 INCREASED: 200 points for gold (20 pips!)
                 else:
                     deviation = 100   # 🔥 INCREASED: 100 points for forex pairs (10 pips)
             
             # 🔥 DYNAMIC MAX RETRIES: More retries for volatile instruments
             if max_retries is None:
-                if 'XAU' in symbol.upper():
+                if 'BTC' in symbol.upper():
                     max_retries = 5  # 🔥 Gold gets 5 attempts
                 else:
                     max_retries = 3  # Forex pairs get 3 attempts
@@ -96,8 +96,20 @@ class OrderExecutor:
                     # Check spread (only on first attempt)
                     if attempt == 0:
                         spread_pips = symbol_info['spread_pips']
-                        if spread_pips > 10.0:  # 🔥 RAISED: 5 → 10 for XAUUSD
-                            logger.warning(f"High spread detected: {spread_pips:.1f} pips")
+
+                        # 🔥 SYMBOL-SPECIFIC SPREAD LIMITS
+                        # Crypto pairs like BTC can have >100 pip spreads in volatile sessions.
+                        if symbol.upper().startswith('BTC'):
+                            max_spread_pips = 250.0  # Allow up to 250 pips for BTC instruments
+                        elif symbol.upper().startswith('XAU'):
+                            max_spread_pips = 25.0   # Gold can spike higher than forex
+                        else:
+                            max_spread_pips = 10.0   # Default for forex majors
+
+                        if spread_pips > max_spread_pips:
+                            logger.warning(
+                                f"High spread detected: {spread_pips:.1f} pips (limit {max_spread_pips:.1f})"
+                            )
                             return False, {"error": f"Spread too high: {spread_pips:.1f} pips"}
                     
                     # Check free margin (only on first attempt)
@@ -107,7 +119,7 @@ class OrderExecutor:
                     
                     # 🔥 PROGRESSIVE DEVIATION: Increase tolerance on each retry
                     # Base deviation + (50 points * attempt)
-                    # Example for XAUUSD: 200, 250, 300, 350, 400 points
+                    # Example for BTCUSD: 200, 250, 300, 350, 400 points
                     current_deviation = deviation + (50 * attempt)
                     
                     if attempt > 0:
@@ -188,8 +200,8 @@ class OrderExecutor:
                     # 🔥 SUCCESS! Check slippage
                     slippage_pips = abs(result.price - price) / symbol_info['pip_value']
                     
-                    # 🔥 LENIENT SLIPPAGE CHECK: 20 pips for XAUUSD, 5 pips for pairs
-                    max_acceptable_slippage = 20.0 if 'XAU' in symbol.upper() else 5.0
+                    # 🔥 LENIENT SLIPPAGE CHECK: 20 pips for BTCUSD, 5 pips for pairs
+                    max_acceptable_slippage = 20.0 if 'BTC' in symbol.upper() else 5.0
                     
                     if slippage_pips > max_acceptable_slippage:
                         logger.warning(f"High slippage: {slippage_pips:.1f} pips (max: {max_acceptable_slippage})")
@@ -575,7 +587,7 @@ if __name__ == "__main__":
         
         # Place buy order
         success, result = executor.place_market_order(
-            symbol="XAUUSDm",
+            symbol="BTCUSDm",
             order_type="BUY",
             lot_size=0.01,
             stop_loss=3800.00,

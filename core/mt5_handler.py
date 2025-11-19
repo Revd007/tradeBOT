@@ -151,7 +151,7 @@ class MT5Handler:
         
         # Add calculated fields
         symbol_dict['pip_value'] = 10 if 'JPY' in symbol else (
-            0.1 if 'XAU' in symbol or 'XAG' in symbol else 0.0001
+            0.1 if 'BTC' in symbol or 'XAG' in symbol else 0.0001
         )
         symbol_dict['spread_pips'] = (
             symbol_dict['spread'] * symbol_dict['point'] / symbol_dict['pip_value']
@@ -171,7 +171,7 @@ class MT5Handler:
         Get historical candles
         
         Args:
-            symbol: Trading symbol (e.g., XAUUSDm)
+            symbol: Trading symbol (e.g., BTCUSDm)
             timeframe: Timeframe (M5, M15, H1, H4, D1)
             count: Number of candles
             shift: Shift from current time
@@ -238,7 +238,7 @@ class MT5Handler:
         Get large amounts of historical candles in batches
         
         Args:
-            symbol: Trading symbol (e.g., XAUUSDm)
+            symbol: Trading symbol (e.g., BTCUSDm)
             timeframe: Timeframe (M5, M15, H1, H4, D1)
             total_count: Total number of candles needed
             batch_size: Number of candles per batch (max 10000 for MT5)
@@ -301,7 +301,7 @@ class MT5Handler:
         (For backtesting with specific date periods)
         
         Args:
-            symbol: Trading symbol (e.g., XAUUSDm)
+            symbol: Trading symbol (e.g., BTCUSDm)
             timeframe: Timeframe (M5, M15, H1, H4, D1)
             start_date: Start datetime (timezone-aware)
             end_date: End datetime (timezone-aware)
@@ -558,7 +558,7 @@ if __name__ == "__main__":
         print(f"Balance: ${account['balance']:.2f}")
         
         # Get candles
-        df = handler.get_candles("XAUUSDm", "M5", count=100)
+        df = handler.get_candles("BTCUSDm", "M5", count=100)
         print(f"\nLatest candles:\n{df.tail()}")
         
         # Get positions

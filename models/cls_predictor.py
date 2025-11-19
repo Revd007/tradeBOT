@@ -317,7 +317,7 @@ class CLSPredictor:
                     
                     # 🔥 FIX: Need symbol parameter!
                     # For backtest, get symbol from df or use default
-                    symbol = 'XAUUSDm'  # Default for backtest
+                    symbol = 'BTCUSDm'  # Default for backtest
                     df_htf = mt5_handler.get_candles(symbol, htf, count=htf_candles_needed)
                     
                     if df_htf is not None and not df_htf.empty:
@@ -730,14 +730,14 @@ class CLSPredictor:
         sl_atr_multiplier: float = None,  # Will be set based on trade_mode
         tp_atr_multiplier: float = None,   # Will be set based on trade_mode
         # 🔥 REALISTIC SIMULATION PARAMETERS
-        spread_pips: float = 2.0,  # Average spread for XAUUSD (realistic)
+        spread_pips: float = 2.0,  # Average spread for BTCUSD (realistic)
         slippage_pips: float = 0.5  # Average slippage per side (entry/exit)
     ) -> Dict:
         """
         🔥 UPDATED: Backtest with multiple trade modes
         
         Args:
-            symbol: Trading symbol (e.g., "XAUUSDm")
+            symbol: Trading symbol (e.g., "BTCUSDm")
             mt5_handler: MT5 connection
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
@@ -1258,7 +1258,7 @@ class CLSPredictor:
             return {}
 
         # 🔥 APPLY REALISTIC TRANSACTION COSTS TO ALL TRADES
-        cost_per_trade = total_transaction_cost_price * lot_size * 100  # For XAUUSD
+        cost_per_trade = total_transaction_cost_price * lot_size * 100  # For BTCUSD
         
         realistic_trades = []
         for trade in trades:
@@ -1413,7 +1413,7 @@ if __name__ == "__main__":
             for mode in trade_modes:
                 print(f"   → {mode}...", end=' ', flush=True)
                 results = cls.backtest(
-                    symbol="XAUUSDm",
+                    symbol="BTCUSDm",
                     mt5_handler=mt5,
                     start_date=dates['backtest_start'],
                     end_date=dates['backtest_end'],
@@ -1433,7 +1433,7 @@ if __name__ == "__main__":
             for mode in trade_modes:
                 print(f"   → {mode}...", end=' ', flush=True)
                 results = cls.backtest(
-                    symbol="XAUUSDm",
+                    symbol="BTCUSDm",
                     mt5_handler=mt5,
                     start_date=dates['forward_start'],
                     end_date=dates['forward_end'],

@@ -573,7 +573,7 @@ class CLSModelTrainer:
                         # NewsAPI free tier: only 30 days, so chunk if needed
                         logger.info(f"   📰 Fetching news sentiment from NewsAPI...")
                         articles = self.news_api.get_historical_news(
-                            symbol='XAUUSDm',
+                            symbol='BTCUSDm',
                             start_date=max(start_date, end_date - timedelta(days=30)),  # Last 30 days only
                             end_date=end_date
                         )
@@ -811,8 +811,8 @@ class CLSModelTrainer:
         # 🔥 CRITICAL: Pass timeframe info to preprocessor
         df.attrs['timeframe'] = timeframe
         
-        # 🔥 FIX: LABELING UNTUK XAUUSD - Threshold berbeda untuk Gold vs Forex
-        # XAUUSD: 100 pips = lebih besar (10 point untuk XAUUSD ≈ 100 pips)
+        # 🔥 FIX: LABELING UNTUK BTCUSD - Threshold berbeda untuk Gold vs Forex
+        # BTCUSD: 100 pips = lebih besar (10 point untuk BTCUSD ≈ 100 pips)
         # Forex lainnya: 10 pips (standard)
         
         # Get symbol info untuk determine pip value
@@ -820,13 +820,13 @@ class CLSModelTrainer:
         point = symbol_info.get('point', 0.001) if isinstance(symbol_info, dict) else (symbol_info.point if symbol_info else 0.001)
         
         # 🔥 FIX: Adjust TP/SL multipliers berdasarkan symbol
-        if 'XAU' in symbol.upper() or 'GOLD' in symbol.upper():
-            # XAUUSD: Lebih besar threshold (100 pips ≈ 10 point untuk XAUUSD)
+        if 'BTC' in symbol.upper() or 'GOLD' in symbol.upper():
+            # BTCUSD: Lebih besar threshold (100 pips ≈ 10 point untuk BTCUSD)
             # Convert 100 pips to ATR multiplier (assuming ATR ~ 15-20 pips)
             # 100 pips / 15 pips ATR ≈ 6.7x, tapi kita gunakan lebih konservatif
-            tp_multiplier = 2.5  # 🔥 FIX: Naik dari 1.5 → 2.5 untuk XAUUSD (lebih besar threshold)
-            sl_multiplier = 1.5  # 🔥 FIX: Naik dari 1.0 → 1.5 untuk XAUUSD
-            logger.info(f"   🏆 XAUUSD detected: Using larger thresholds (TP={tp_multiplier}x ATR, SL={sl_multiplier}x ATR)")
+            tp_multiplier = 2.5  # 🔥 FIX: Naik dari 1.5 → 2.5 untuk BTCUSD (lebih besar threshold)
+            sl_multiplier = 1.5  # 🔥 FIX: Naik dari 1.0 → 1.5 untuk BTCUSD
+            logger.info(f"   🏆 BTCUSD detected: Using larger thresholds (TP={tp_multiplier}x ATR, SL={sl_multiplier}x ATR)")
             logger.info(f"   → Equivalent to ~100 pips target (vs 10 pips for forex)")
         else:
             # Forex standard: 10 pips equivalent
@@ -860,7 +860,7 @@ class CLSModelTrainer:
             buy_ratio = (buy_count / total * 100) if total > 0 else 0
             sell_ratio = (sell_count / total * 100) if total > 0 else 0
         
-            logger.info(f"🎯 Calibrated Labeling: Removed {removed_count:,} HOLD/NaN samples ({removed_count/initial_count*100:.1f}%)")
+        logger.info(f"🎯 Calibrated Labeling: Removed {removed_count:,} HOLD/NaN samples ({removed_count/initial_count*100:.1f}%)")
             logger.info(f"📊 Class Distribution (after labeling):")
             logger.info(f"   BUY (1): {buy_count:,} ({buy_ratio:.1f}%)")
             logger.info(f"   SELL (0): {sell_count:,} ({sell_ratio:.1f}%)")
@@ -1157,7 +1157,7 @@ Keep response under 150 words.<｜end▁of▁sentence｜>"""
                         sampling_strategy=0.85,  # Target: minority = 85% of majority
                         k_neighbors=min(5, fold_counts.min() - 1)
                     )
-                    X_resampled, y_resampled = smote.fit_resample(X_train_fold, y_train_fold)
+            X_resampled, y_resampled = smote.fit_resample(X_train_fold, y_train_fold)
                 except Exception as e:
                     # Fallback if SMOTE fails
                     X_resampled, y_resampled = X_train_fold, y_train_fold
@@ -1420,18 +1420,18 @@ Keep response under 150 words.<｜end▁of▁sentence｜>"""
                     random_state=42, 
                     k_neighbors=min(5, minority_count - 1)
                 )
-                X_resampled, y_resampled = smote.fit_resample(X, y_specialist)
+            X_resampled, y_resampled = smote.fit_resample(X, y_specialist)
             
             # Create uniform weights for resampled data
-                weights_resampled = pd.Series(1.0, index=range(len(X_resampled)))
+            weights_resampled = pd.Series(1.0, index=range(len(X_resampled)))
             
                 logger.info(f"   ✅ SMOTE applied: {len(X)} → {len(X_resampled)} samples")
                 new_counts = pd.Series(y_resampled).value_counts()
                 new_ratio = new_counts.min() / new_counts.max()
                 logger.info(f"   New balance: {new_counts.get(0,0)}/{new_counts.get(1,0)} (ratio: {new_ratio:.2%})")
                 logger.info(f"   → Target tercapai: Data sekarang 50/50 (setara 33% BUY, 33% SELL jika HOLD ada)")
-                X, y_specialist, weights = X_resampled, y_resampled, weights_resampled
-            except Exception as e:
+            X, y_specialist, weights = X_resampled, y_resampled, weights_resampled
+        except Exception as e:
                 logger.warning(f"   ⚠️  SMOTE failed: {e}. Using original data.")
         else:
             logger.info(f"   ✅ Data already balanced ({current_ratio:.2%} >= 95%)")
@@ -1499,7 +1499,7 @@ Keep response under 150 words.<｜end▁of▁sentence｜>"""
                     sampling_strategy=0.85,
                     k_neighbors=min(5, train_counts.min() - 1)
                 )
-                X_train_resampled, y_train_resampled = final_smote.fit_resample(X_train, y_train)
+        X_train_resampled, y_train_resampled = final_smote.fit_resample(X_train, y_train)
                 logger.info(f"   ✅ Final SMOTE: {len(X_train)} → {len(X_train_resampled)} samples")
             except Exception as e:
                 logger.warning(f"   ⚠️  Final SMOTE failed: {e}. Using original data.")
@@ -1733,7 +1733,7 @@ Keep response under 150 words.<｜end▁of▁sentence｜>"""
         # 🔥 FIX: BALANCED RECALL BIAS: Sama untuk Bullish & Bearish (tidak boleh ada perbedaan!)
         tf_recall_bias_map = {'M5': 0.03, 'M15': 0.02, 'H1': 0.02, 'H4': 0.01}  # 🔥 SAMA untuk BULLISH & BEARISH
         # 🔥 CRITICAL: Tidak boleh ada recall_bias negatif (akan membuat model terlalu konservatif)
-        recall_bias = tf_recall_bias_map.get(timeframe, 0.02)
+            recall_bias = tf_recall_bias_map.get(timeframe, 0.02)
         logger.info(f"   🎯 Selecting balanced threshold: maximize min(P,R) - {alpha}*|P-R| + {recall_bias}*R...")
         scores = np.minimum(precisions[:-1], recalls[:-1]) - alpha * np.abs(precisions[:-1] - recalls[:-1]) + recall_bias * recalls[:-1]
         
@@ -1983,7 +1983,7 @@ Keep response under 150 words.<｜end▁of▁sentence｜>"""
     def train_all_timeframes(
         self,
         mt5_handler,
-        symbol: str = 'XAUUSDm',
+        symbol: str = 'BTCUSDm',
         model_type: str = 'lightgbm'
     ):
         """
@@ -2147,7 +2147,7 @@ Keep response under 150 words.<｜end▁of▁sentence｜>"""
         self,
         mt5_handler,
         timeframe: str,
-        symbol: str = 'XAUUSDm',
+        symbol: str = 'BTCUSDm',
         model_type: str = 'random_forest'
     ):
         """Retrain a single timeframe model"""
@@ -2284,7 +2284,7 @@ if __name__ == "__main__":
     
     trainer.train_all_timeframes(
         mt5_handler=mt5,
-        symbol='XAUUSDm',
+        symbol='BTCUSDm',
         model_type='lightgbm'  # Options: 'lightgbm', 'xgboost', 'random_forest', 'gradient_boosting'
     )
     
